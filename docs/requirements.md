@@ -344,11 +344,13 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 
 ### 14.2 Guard 版本附加标准
 
+> 当前未勾选项是有意保留的未完成准入门槛，不代表实现缺失：真实 TUI 手动命令、HEAD 变化 Shell 场景、20～30 个企业任务和 pi-lens 同时安装联调仍未完成。Guard 因此继续保持 experimental opt-in。
+
 - [x] edit/write 缺少有效 Evidence 时能稳定 block（Fixture 与真实 Pi 合成流程）；
 - [x] 返回的信息足以让 Agent 下一轮自行补救；
 - [x] 新文件和无同类实现项目不会永久阻塞；
 - [x] 支持项目级禁用和明确 bypass；
-- [ ] 与并行 Tool Call、pi-lens 组合时无死循环（并行已验证，等待真实 pi-lens 联调）。
+- [ ] 与并行 Tool Call、pi-lens 组合时无死循环（并行 Tool Call 已验证；同时安装 pi-lens 的真实任务联调未完成）。
 
 ### 14.3 Project Intelligence 附加标准
 

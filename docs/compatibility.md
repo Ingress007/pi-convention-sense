@@ -38,18 +38,22 @@ CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 
 |---|---:|---:|---:|
 | Extension 加载与 lifecycle hooks | 是 | 是 | 是 |
 | named system prompt section 与 custom Context | 是 | 是 | 不适用/旧实现 |
-| read ledger 只接受成功 tool result | 是 | 未重跑工具流 | 是 |
-| Snapshot 创建与 Context 注入 | 是 | 未重跑工具流 | 是 |
-| Branch checkpoint 恢复 | 是 | 未重跑 `/tree` | 是 |
-| Guard block → read → Context → allow | 是 | 未重跑工具流 | 是 |
-| 一次性 bypass | 是 | 未重跑工具流 | 部分人工验证 |
-| Shell Git 后置审计 | 是 | 未重跑工具流 | 是 |
-| Project Profile / Knowledge Capsule | 是 | Profile 启动加载已验证 | 是 |
-| `/convention-reset confirm` | 是 | 未人工复验 | 未人工复验 |
+| read ledger 只接受成功 tool result | 是 | 真实 Pi 主流程已验证 | 是 |
+| Snapshot 创建与 Context 注入 | 是 | 真实 Pi 主流程已验证 | 是 |
+| Branch checkpoint 恢复 | 是 | 真实流程/自动测试已验证；未单独复验全部 TUI 操作 | 是 |
+| Guard block → read → Context → allow | 是 | 真实 Pi 主路径已验证 | 是 |
+| 一次性 bypass | 是 | 主路径已验证；真实 TUI 手动交互仍待补充 | 部分人工验证 |
+| Shell Git 后置审计 | 是 | 真实 Pi 主路径已验证；HEAD 变化场景待补充 | 是 |
+| Project Profile / Knowledge Capsule | 是 | Profile 启动加载与 Capsule 已验证 | 是 |
+| `/convention-reset confirm` | 是 | 真实流程已验证；未作为独立手动 TUI 门禁 | 未人工复验 |
 
-当前独立真实运行使用 `pi --print --no-session` 显式加载 Extension，验证了 `session_start → before_agent_start → context → agent_settled → session_shutdown`，并确认受信 Project Profile 成功加载。它没有使用工具，因此不能替代 0.87.1 下的交互式 Guard 工具流复验。
+当前真实评估同时覆盖了 `--print` 生命周期和带工具的 Observe/Guard 主路径，验证 `session_start → before_agent_start → context → agent_settled → session_shutdown`、read ledger、Snapshot/Context、未读目标阻断、补读后放行、Shell 后置审计和 Profile 加载。真实 TUI 手动 bypass、HEAD 变化 Shell 以及 pi-lens 同时安装联调仍不计为完成。
 
-## 4. 语言与项目结构
+## 4. 真实项目证据
+
+SnailJob 后端与 Admin 的完整结果见 [SnailJob Pi 0.87.1 验收](evaluations/snail-job-pi-0.87.1-results.md)；SnailAI 结果见 [SnailAI Pi 0.87.1 验收](evaluations/snail-ai-pi-0.87.1-results.md)。SnailAI Admin 原生检查因缺少 `node_modules` 标记为 `ENVIRONMENT_BLOCKED`，不扩展为已验证的前端兼容声明。
+
+## 5. 语言与项目结构
 
 | 能力 | Fixture | 真实项目 | 状态 |
 |---|---:|---:|---|
@@ -60,7 +64,7 @@ CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 
 | pnpm workspace | 是 | snail-job-admin | 已验证 |
 | package workspace 隔离 | 是 | snail-job-admin | 已验证 |
 
-## 5. 操作系统
+## 6. 操作系统
 
 | 系统 | 自动测试 | 真实交互式 Pi | 状态 |
 |---|---:|---:|---|
@@ -70,7 +74,7 @@ CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 
 
 没有真实验证的环境不得仅根据相似性声明为已支持。
 
-## 6. Project Profile 与仓库边界
+## 7. Project Profile 与仓库边界
 
 | 场景 | Profile 行为 | Candidate 行为 |
 |---|---|---|
@@ -82,7 +86,7 @@ CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 
 
 外部仓库策略有 Extension 集成测试覆盖。若要加载 B 的 Profile，必须从 B 根目录显式批准并启动新的 Pi。
 
-## 7. Pack 与 Adapter
+## 8. Pack 与 Adapter
 
 | 项目 | 当前状态 |
 |---|---|
@@ -93,7 +97,7 @@ CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 
 
 Global Pack 只能是 advisory。未审核 draft Profile 的 hard 规则同样降级为 advisory。
 
-## 8. 发布前兼容门槛
+## 9. 发布前兼容门槛
 
 扩大兼容声明前必须：
 
@@ -105,7 +109,7 @@ Global Pack 只能是 advisory。未审核 draft Profile 的 hard 规则同样�
 6. 更新本文档和 Changelog；
 7. 不得以 silent-on-clean 的 LSP 结果替代 TypeScript 编译和自动测试。
 
-## 9. 当前不在范围内
+## 10. 当前不在范围内
 
 - 除 `0.87.1` 外的 Pi 版本（`0.85.1` 仅保留历史验证记录）；
 - Node.js 20 及更低版本；

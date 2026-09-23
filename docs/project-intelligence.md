@@ -1,6 +1,6 @@
 # Project Intelligence：Global Pack、Project Profile 与 Local Evidence
 
-> 状态：Stage 3 Profile Runtime、Profiler Skill、TypeScript/Vue Adapter、最小内置 Pack catalog 与 SnailJob 全栈真实验证已完成
+> 状态：Stage 3 Profile Runtime、Profiler Skill、TypeScript/Vue Adapter、最小内置 Pack catalog 与 SnailJob/SnailAI 真实主流程验证已完成
 > 主技术设计：[design.md](./design.md)
 > 首个垂直验证项目：SnailJob 后端与 `snail-job-admin` 前端
 > 数据模型：`src/profile/types.ts`
@@ -30,7 +30,7 @@ Profile Runtime 已完成：
 
 自动测试覆盖 Profile 正反例、MVC/REST effective role 隔离、Capsule 预算、TypeScript/Vue role 与 workspace 隔离、Extension/Guard/reset 生命周期、外部 Profile trust 隔离和安全日志。最新完整验证为 `npm run verify`，56/56 通过。
 
-当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈真实生命周期验证、Pack/Adapter 贡献规范和兼容矩阵。下一阶段扩展更多真实仓库、Pi 版本与技术栈矩阵；当前不宣称覆盖其他客户端或未验证技术栈。
+当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈、SnailAI 主流程真实生命周期验证、Pack/Adapter 贡献规范和兼容矩阵。SnailJob 还完成了 Job Tag Management CRUD v2 真实业务开发验收；该业务 diff 未提交，供人工审查。SnailAI Admin 原生检查因缺少 `node_modules` 暂列环境阻塞，不扩展为已验证兼容性。下一阶段扩展更多真实仓库、Pi 版本与技术栈矩阵；当前不宣称覆盖其他客户端或未验证技术栈。
 
 ## 2. 三层架构
 
@@ -389,7 +389,7 @@ TypeScript/Vue Adapter 已实现于：
 - 主应用文件不默认使用 workspace build script 作为 peer；
 - Profile 和 Local Evidence 都遵守 Token 预算。
 
-自动 fixture 与 Extension 测试已关闭上述分类、workspace、generated、prospective 与 Guard 生命周期风险；真实 `snail-job-admin` 样本评估留在全栈验证任务中。
+自动 fixture 与 Extension 测试已关闭上述分类、workspace、generated、prospective 与 Guard 生命周期风险；真实 `snail-job-admin` 样本评估留在全栈验证任务中；SnailJob/SnailAI 的永久结果见 [双项目发布就绪评估](evaluations/release-readiness-results.md)。
 
 ## 11. 开源贡献边界
 

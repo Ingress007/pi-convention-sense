@@ -13,7 +13,9 @@
 ### 验证
 
 - Pi `0.87.1` 下 strict TypeScript、clean build 与 56 个自动测试全部通过；
-- 独立无 Session Pi `0.87.1` 子进程验证 Extension 加载、named prompt section、custom Context、Profile 加载及 settle/shutdown 生命周期。
+- 独立无 Session Pi `0.87.1` 子进程验证 Extension 加载、named prompt section、custom Context、Profile 加载及 settle/shutdown 生命周期；SnailJob/SnailAI 真实项目主流程验收通过。
+- SnailJob Job Tag Management CRUD v2 完成真实业务开发验收：后端 compile、Admin typecheck/build、六种数据库方言、namespace 隔离和前端 typed API 均通过；业务修改按要求保持未提交。
+- SnailAI Admin 原生检查因缺少 `node_modules` 记录为 `ENVIRONMENT_BLOCKED`，未安装依赖或修改 lockfile。
 
 ## [0.4.0-alpha.1] - 2026-09-23
 

@@ -259,6 +259,8 @@ node skills/project-profiler/scripts/profile-tools.mjs validate \
 
 ## 10. Pull Request 清单
 
+> 这是每个新增 Adapter/Pack PR 的空白模板，不是当前仓库的未完成验收门禁。SnailJob/SnailAI 本轮真实验收结果见 `docs/evaluations/`；Guard 生产准入的未完成项仍记录在 `requirements.md` 和 `stage-2-guard.md`。
+
 - [ ] role 与边界有明确文档
 - [ ] Pack 仅 advisory 且无脚本
 - [ ] generated/test/vendor 排除已测试

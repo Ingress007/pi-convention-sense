@@ -157,6 +157,14 @@ examples/config/java-guard.json
 
 配置只有在项目受信任时加载，因此启动 Pi 时需要 `--approve`，或者通过 Pi 的项目信任流程批准项目。
 
+### 第一次使用的最小流程
+
+1. 从目标项目 Git 根目录启动 Pi，并确认项目已受信任。
+2. 复制对应的 Observe 配置，运行 `/convention-status` 检查配置和 Profile 来源。
+3. 先 `read` 目标文件和同类实现，再进行 `edit`/`write`；下一轮 Context 会注入 Snapshot。
+4. 若显式启用 Guard，遇到 `TARGET_NOT_READ`、`SNAPSHOT_NOT_INJECTED` 等 reason code 时按提示补读并重试。
+5. 仅在明确知道无需补读时使用精确路径的 `/convention-bypass <path>`；完成任务或切换上下文后可使用 `/convention-reset confirm`。
+
 ## 6. Observe 模式
 
 Observe 是默认模式：
@@ -376,7 +384,19 @@ Bypass 只在原本会阻断时消费，不跨 Session 或 Branch。
 - 完整 prompt；
 - 完整 Shell 命令。
 
-## 16. 常见问题
+## 16. 真实项目验收与业务开发记录
+
+SnailJob 后端和 `snail-job-admin` 已在 Pi `0.87.1` 下完成 Profile、Pack、Local Evidence、Observe、Guard、Session/Branch、仓库信任边界和隐私验收。除插件链路外，还在真实 `master` 分支完成了一套未提交的 Job Tag Management CRUD，用于验证插件辅助真实业务开发：
+
+- 后端采用 Controller → Service → Mapper/PO 分层，并由服务端从 `UserSessionUtils.currentUserSession()` 推导 namespace；
+- 更新、删除同时限定记录 ID 与 namespace，覆盖分页、关键词和 `tagStatus` 筛选；
+- 数据库定义覆盖 MySQL、PostgreSQL、Kingbase、Oracle、DM8、SQL Server；
+- Admin 覆盖 typed API、`Api.*` 类型、表格/抽屉、路由局部搜索和中英文 i18n；
+- 后端 compile、Admin typecheck/build、`git diff --check` 均通过，业务修改按要求保持未提交供人工审查。
+
+SnailAI 后端和 Admin 已完成静态分析及真实 Pi 主流程验收；SnailAI Admin 的原生 typecheck、lint、format、build 因缺少 `node_modules` 暂列 `ENVIRONMENT_BLOCKED`，未安装依赖或修改 lockfile。详见：[SnailJob 报告](docs/evaluations/snail-job-pi-0.87.1-results.md)、[SnailAI 报告](docs/evaluations/snail-ai-pi-0.87.1-results.md)、[发布就绪报告](docs/evaluations/release-readiness-results.md)。
+
+## 17. 常见问题
 
 ### Profile 显示 missing
 
@@ -472,3 +492,7 @@ node scripts/evaluate-profile-repository.mjs \
 - [Stage 2 Guard](docs/stage-2-guard.md)
 - [Web 技术栈覆盖调研](docs/research/web-technology-stack-coverage.md)
 - [SnailJob 全栈验证](docs/evaluations/snail-job-fullstack-results.md)
+- [SnailJob Pi 0.87.1 验收](docs/evaluations/snail-job-pi-0.87.1-results.md)
+- [SnailAI Pi 0.87.1 验收](docs/evaluations/snail-ai-pi-0.87.1-results.md)
+- [SnailJob/SnailAI 发布就绪评估](docs/evaluations/release-readiness-results.md)
+- [双项目测试计划与执行记录](docs/evaluations/snail-job-snail-ai-test-plan.md)

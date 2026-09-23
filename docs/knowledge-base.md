@@ -11,11 +11,14 @@
 | Pi | 当前开发与真实生命周期验证基线 `0.87.1`；peer dependency `*` 不代表全版本兼容 |
 | TypeScript | `5.9.3`，strict + NodeNext |
 | 自动测试 | `npm run verify`，56/56 |
+| 真实 Pi 基线 | Pi `0.87.1`，SnailJob/SnailAI 主流程已验证 |
 | Project Profile | `.convention-sense/profile.json` |
 | Profile fingerprint | `f806157678d37814` |
 | Profile review | `draft`；不得宣称 reviewed |
 | 默认运行模式 | `observe` + fail-open |
 | Guard | experimental opt-in |
+| 真实业务验收 | SnailJob Job Tag CRUD v2 已通过编译/前端检查，修改保留未提交 |
+| 环境限制 | SnailAI Admin 缺少 `node_modules`，原生检查为 `ENVIRONMENT_BLOCKED` |
 
 ## 2. 产品定位
 
@@ -192,6 +195,14 @@ Local Evidence（当前 Scope 的真实代码事实）
 
 ## 8. 验证与发布门槛
 
+### 8.1 当前真实项目结论
+
+SnailJob 后端与 Admin 已完成 Profile、Pack、Local Evidence、Observe、Guard、Session/Branch/reset、跨仓库信任和隐私验证；并在真实 `master` 分支完成 Job Tag Management CRUD v2 业务开发验收。该修改未创建 commit，保留给人工审查。后端 compile、Admin typecheck/build、六种数据库方言审查和 `git diff --check` 均通过，namespace 由服务端会话推导。
+
+SnailAI 后端与 Admin 已完成静态分析和 Pi 主流程回归。SnailAI Admin 因缺少 `node_modules` 未执行原生 typecheck、lint、format、build，分类为环境限制而非产品缺陷；本轮未安装依赖或修改 lockfile。
+
+永久报告： [SnailJob 验收](evaluations/snail-job-pi-0.87.1-results.md)、[SnailAI 验收](evaluations/snail-ai-pi-0.87.1-results.md)、[发布就绪评估](evaluations/release-readiness-results.md)。原始证据保留在 `.tmp/pi-convention-sense/`，不纳入版本控制。
+
 日常完整验证：
 
 ```bash
@@ -227,6 +238,10 @@ npm pack --dry-run
 | 兼容声明和发布门槛 | [兼容性矩阵](compatibility.md) |
 | Stage 0/1/2 历史 | [Spike](stage-0-spike.md)、[Observe](stage-1-observe.md)、[Guard](stage-2-guard.md) |
 | 真实全栈证据 | [SnailJob 全栈验证](evaluations/snail-job-fullstack-results.md) |
+| SnailJob Pi 验收 | [SnailJob Pi 0.87.1 结果](evaluations/snail-job-pi-0.87.1-results.md) |
+| SnailAI Pi 验收 | [SnailAI Pi 0.87.1 结果](evaluations/snail-ai-pi-0.87.1-results.md) |
+| 发布就绪评估 | [发布就绪结果](evaluations/release-readiness-results.md) |
+| 双项目测试计划与执行记录 | [SnailJob 与 SnailAI 全场景测试计划](evaluations/snail-job-snail-ai-test-plan.md) |
 | 版本变化 | [更新日志](../CHANGELOG.md) |
 | Agent 工作规范 | [AGENTS.md](../AGENTS.md) |
 

@@ -1,6 +1,6 @@
 # 阶段 2：V1 Guard 决策与验证记录
 
-> 状态：实验实现与合成验证完成，等待企业项目准入评估
+> 状态：实验实现、SnailJob/SnailAI 主流程验证完成；生产准入仍待补充任务矩阵
 > 默认运行模式：`observe`
 > Guard 发布状态：实验性、必须显式启用
 
@@ -122,6 +122,8 @@ Session resume、Session switch 和 `/tree` 后清空注入记录；下一轮 Co
 
 ## 7. 验证状态
 
+> 未勾选项均为本轮明确未完成的准入或交互验证，不是遗漏：Guard 继续保持 `experimental opt-in`，不默认阻断。
+
 - [x] formal Guard reason code 单元测试；
 - [x] valid/weak/no-peer/new-file/prospective 测试；
 - [x] bypass 单次消费和 path exception；
@@ -217,7 +219,7 @@ truncated=false
 
 ## 11. 当前完成度
 
-阶段 2 的**实验实现**已经完成，可继续保持 Observe 或在 Fixture/专用 Branch 显式启用 Guard。阶段 2 的**生产准入**尚未完成，原因不是代码或测试失败，而是缺少用户即将提供的真实企业 Java 项目数据。
+阶段 2 的**实验实现**以及 SnailJob/SnailAI 的真实主流程验证已经完成，可继续保持 Observe 或在 Fixture/专用 Branch 显式启用 Guard。阶段 2 的**生产准入**尚未完成：真实 TUI 手动命令、HEAD 变化 Shell 场景、20～30 个 Observe/Shadow Guard 任务和 pi-lens 同时安装联调仍是待办门槛。这些未完成项不是本轮产品失败；它们决定 Guard 是否可以扩大启用范围。
 
 企业项目到位后优先执行：
 
