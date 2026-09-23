@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "mode": "observe",
+  "injectContext": true,
+  "persistSessionState": true,
+  "logPath": ".pi/convention-sense/spike.ndjson",
+  "logging": {
+    "level": "info"
+  }
+}

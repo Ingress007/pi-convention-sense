@@ -1,0 +1,343 @@
+{
+  "schemaVersion": 1,
+  "profileVersion": "0.1.0",
+  "project": {
+    "name": "snail-job",
+    "repositoryRoot": ".",
+    "relatedProjects": [
+      {
+        "name": "snail-job-admin",
+        "path": "../snail-job-admin",
+        "relationship": "frontend"
+      }
+    ]
+  },
+  "generatedAt": "2026-09-22T00:00:00.000Z",
+  "generatedBy": "agent",
+  "review": {
+    "status": "draft"
+  },
+  "technologies": [
+    {
+      "id": "java",
+      "kind": "language",
+      "version": "21",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "pom.xml",
+          "detail": "java.version is 21"
+        }
+      ]
+    },
+    {
+      "id": "spring-boot",
+      "kind": "framework",
+      "version": "4",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "pom.xml",
+          "detail": "Spring Boot parent and dependency management"
+        }
+      ]
+    },
+    {
+      "id": "maven-multi-module",
+      "kind": "build",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "pom.xml",
+          "detail": "Root reactor declares multiple module families"
+        }
+      ]
+    },
+    {
+      "id": "mybatis-plus",
+      "kind": "persistence",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "pom.xml",
+          "detail": "MyBatis-Plus dependencies are managed by the reactor"
+        }
+      ]
+    },
+    {
+      "id": "grpc-protobuf",
+      "kind": "transport",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-common/snail-job-common-core/src/main/java/com/aizuda/snailjob/common/core/grpc/auto",
+          "detail": "Generated protobuf and gRPC transport models"
+        }
+      ]
+    }
+  ],
+  "packs": [
+    {
+      "id": "java-spring",
+      "version": "1.0.0",
+      "enabled": true,
+      "source": "builtin"
+    }
+  ],
+  "modules": [
+    {
+      "id": "server-ui",
+      "title": "Server-rendered UI boundary",
+      "priority": 100,
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-ui/**"
+        ]
+      },
+      "architecture": [
+        "spring-mvc-view"
+      ],
+      "knowledgeRefs": [
+        "server-ui-boundary"
+      ],
+      "conventionRefs": [
+        "server-ui-controller-style"
+      ]
+    },
+    {
+      "id": "server-web",
+      "title": "REST administration boundary",
+      "priority": 90,
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-web/**"
+        ]
+      },
+      "architecture": [
+        "spring-rest",
+        "web-service-layer"
+      ],
+      "knowledgeRefs": [
+        "server-web-boundary"
+      ]
+    },
+    {
+      "id": "datasource",
+      "title": "Persistence adapters",
+      "priority": 80,
+      "selector": {
+        "paths": [
+          "snail-job-datasource/**"
+        ]
+      },
+      "architecture": [
+        "mybatis-persistence"
+      ]
+    },
+    {
+      "id": "common-core",
+      "title": "Shared core contracts",
+      "priority": 70,
+      "selector": {
+        "paths": [
+          "snail-job-common/snail-job-common-core/**"
+        ]
+      },
+      "architecture": [
+        "shared-kernel"
+      ],
+      "knowledgeRefs": [
+        "generated-grpc-boundary"
+      ]
+    }
+  ],
+  "scopeOverrides": [
+    {
+      "id": "server-ui-view-controller",
+      "priority": 100,
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-ui/**"
+        ],
+        "baseRoles": [
+          "controller"
+        ],
+        "annotationsAny": [
+          "Controller"
+        ]
+      },
+      "effectiveRole": "mvc-view-controller",
+      "architecture": [
+        "spring-mvc-view"
+      ],
+      "tags": [
+        "server-rendered-view"
+      ],
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-ui/src/main/java/com/aizuda/snailjob/server/ui/controller/WebController.java",
+          "detail": "Uses @Controller and returns view names"
+        }
+      ]
+    },
+    {
+      "id": "server-web-view-controller",
+      "priority": 95,
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-web/**"
+        ],
+        "baseRoles": [
+          "controller"
+        ],
+        "annotationsAny": [
+          "Controller"
+        ]
+      },
+      "effectiveRole": "mvc-view-controller",
+      "architecture": [
+        "spring-mvc-view"
+      ],
+      "tags": [
+        "server-rendered-view"
+      ],
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-web/src/main/java/com/aizuda/snailjob/server/web/controller/WebController.java",
+          "detail": "Uses @Controller rather than @RestController"
+        }
+      ]
+    },
+    {
+      "id": "server-web-rest-controller",
+      "priority": 90,
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-web/**"
+        ],
+        "baseRoles": [
+          "controller"
+        ],
+        "annotationsAny": [
+          "RestController"
+        ]
+      },
+      "effectiveRole": "rest-controller",
+      "architecture": [
+        "spring-rest"
+      ],
+      "tags": [
+        "json-api"
+      ],
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-web/src/main/java/com/aizuda/snailjob/server/web/controller/JobController.java",
+          "detail": "Uses @RestController and REST response wrappers"
+        }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "server-ui-boundary",
+      "category": "architecture",
+      "title": "Server UI boundary",
+      "summary": "server-ui controllers are Spring MVC view controllers and must not inherit REST response-wrapper conventions from server-web.",
+      "strength": "hard",
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-ui/**"
+        ]
+      },
+      "detailPath": "snail-job-server-interface/snail-job-server-ui/README.md",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-ui/src/main/java/com/aizuda/snailjob/server/ui/controller/WebController.java",
+          "detail": "Returns server-rendered view names"
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "server-web-boundary",
+      "category": "architecture",
+      "title": "Server Web boundary",
+      "summary": "Most server-web controllers expose REST APIs, while explicitly annotated MVC view controllers remain a separate effective role.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-web/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-web/src/main/java/com/aizuda/snailjob/server/web/controller/JobController.java",
+          "detail": "Representative @RestController"
+        },
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-web/src/main/java/com/aizuda/snailjob/server/web/controller/WebController.java",
+          "detail": "MVC exception using @Controller"
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "generated-grpc-boundary",
+      "category": "workflow",
+      "title": "Generated gRPC sources",
+      "summary": "Generated protobuf and gRPC Java sources are read-only evidence exclusions and must not be treated as editable project conventions.",
+      "strength": "hard",
+      "selector": {
+        "paths": [
+          "snail-job-common/snail-job-common-core/src/main/java/com/aizuda/snailjob/common/core/grpc/auto/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-common/snail-job-common-core/src/main/java/com/aizuda/snailjob/common/core/grpc/auto/SnailJobGrpcRequest.java",
+          "detail": "Generated source header"
+        }
+      ],
+      "source": "agent-draft"
+    }
+  ],
+  "conventions": [
+    {
+      "id": "server-ui-controller-style",
+      "category": "controller-style",
+      "statement": "Use MVC view-controller peers for server-ui controllers; do not copy REST response wrappers from server-web.",
+      "strength": "hard",
+      "selector": {
+        "paths": [
+          "snail-job-server-interface/snail-job-server-ui/**"
+        ],
+        "baseRoles": [
+          "controller"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "snail-job-server-interface/snail-job-server-ui/src/main/java/com/aizuda/snailjob/server/ui/controller/WebController.java",
+          "detail": "MVC view controller implementation"
+        }
+      ],
+      "source": "agent-draft"
+    }
+  ]
+}

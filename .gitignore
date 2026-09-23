@@ -1,0 +1,38 @@
+# Dependencies and reproducible build output
+node_modules/
+dist/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+*.tgz
+
+# Local runtime state and temporary artifacts
+.tmp/
+.pi/convention-sense/
+.convention-sense/profile.candidate.json
+.convention-sense/*.tmp-*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.local
+
+# Editor and operating-system state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

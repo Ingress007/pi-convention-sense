@@ -1,0 +1,16 @@
+# Keep repository text stable across Windows, Linux, and macOS.
+* text=auto eol=lf
+
+# Preserve conventional Windows script line endings when such files are added.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Treat common binary assets as binary.
+*.gif binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.webp binary
+*.pdf binary

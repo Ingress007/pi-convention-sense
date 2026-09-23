@@ -1,0 +1,315 @@
+{
+  "schemaVersion": 1,
+  "profileVersion": "0.1.0",
+  "project": {
+    "name": "snail-job-admin",
+    "repositoryRoot": ".",
+    "relatedProjects": [
+      {
+        "name": "snail-job",
+        "path": "../snail-job",
+        "relationship": "backend"
+      }
+    ]
+  },
+  "generatedAt": "2026-09-22T00:00:00.000Z",
+  "generatedBy": "agent",
+  "review": {
+    "status": "draft"
+  },
+  "technologies": [
+    {
+      "id": "typescript",
+      "kind": "language",
+      "version": "5.8.3",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "package.json", "detail": "typescript devDependency is 5.8.3" }
+      ]
+    },
+    {
+      "id": "vue",
+      "kind": "framework",
+      "version": "3.5.17",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "package.json", "detail": "Vue 3 application dependency" }
+      ]
+    },
+    {
+      "id": "vite",
+      "kind": "build",
+      "version": "7.0.4",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "package.json", "detail": "Vite build and development scripts" }
+      ]
+    },
+    {
+      "id": "pnpm-workspace",
+      "kind": "build",
+      "version": "10",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "pnpm-workspace.yaml", "detail": "packages/* workspace boundary" }
+      ]
+    },
+    {
+      "id": "pinia",
+      "kind": "framework",
+      "version": "3.0.3",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "package.json", "detail": "Pinia state management dependency" }
+      ]
+    },
+    {
+      "id": "vue-router",
+      "kind": "framework",
+      "version": "4.5.1",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "package.json", "detail": "Vue Router dependency" }
+      ]
+    },
+    {
+      "id": "axios",
+      "kind": "transport",
+      "version": "1.10.0",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "manifest", "path": "packages/axios/package.json", "detail": "Workspace request-client implementation" }
+      ]
+    }
+  ],
+  "packs": [
+    {
+      "id": "typescript-vue",
+      "version": "1.0.0",
+      "enabled": true,
+      "source": "builtin"
+    }
+  ],
+  "modules": [
+    {
+      "id": "admin-app",
+      "title": "Vue administration application",
+      "priority": 100,
+      "selector": { "paths": ["src/**"] },
+      "architecture": ["vue-spa"],
+      "knowledgeRefs": ["app-layering", "request-layering"]
+    },
+    {
+      "id": "workspace-axios",
+      "title": "Axios request infrastructure",
+      "priority": 95,
+      "selector": { "paths": ["packages/axios/**"] },
+      "architecture": ["workspace-request-client"],
+      "knowledgeRefs": ["workspace-boundary"]
+    },
+    {
+      "id": "workspace-hooks",
+      "title": "Reusable hooks package",
+      "priority": 90,
+      "selector": { "paths": ["packages/hooks/**"] },
+      "architecture": ["workspace-hooks"],
+      "knowledgeRefs": ["workspace-boundary"]
+    },
+    {
+      "id": "workspace-materials",
+      "title": "Reusable Vue materials",
+      "priority": 85,
+      "selector": { "paths": ["packages/materials/**"] },
+      "architecture": ["workspace-components"],
+      "knowledgeRefs": ["workspace-boundary"]
+    }
+  ],
+  "scopeOverrides": [
+    {
+      "id": "app-page",
+      "priority": 100,
+      "selector": {
+        "paths": ["src/views/**"],
+        "excludePaths": ["src/views/**/modules/**"],
+        "baseRoles": ["page"]
+      },
+      "effectiveRole": "vue-page",
+      "architecture": ["route-page"],
+      "tags": ["application-view"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/views/job/batch/index.vue", "detail": "Route page using script setup and TSX" }
+      ]
+    },
+    {
+      "id": "view-local-component",
+      "priority": 95,
+      "selector": {
+        "paths": ["src/views/**/modules/**"],
+        "baseRoles": ["component"]
+      },
+      "effectiveRole": "view-local-component",
+      "architecture": ["route-local-component"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/views/job/batch/modules/job-batch-search.vue", "detail": "Component local to one route page" }
+      ]
+    },
+    {
+      "id": "shared-component",
+      "priority": 90,
+      "selector": { "paths": ["src/components/**"], "baseRoles": ["component"] },
+      "effectiveRole": "shared-vue-component",
+      "architecture": ["shared-ui"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/components/common/search-form.vue", "detail": "Reusable application component" }
+      ]
+    },
+    {
+      "id": "application-layout",
+      "priority": 90,
+      "selector": { "paths": ["src/layouts/*-layout/**"], "baseRoles": ["layout"] },
+      "effectiveRole": "application-layout",
+      "architecture": ["vue-layout"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/layouts/base-layout/index.vue", "detail": "Top-level administration layout" }
+      ]
+    },
+    {
+      "id": "application-hook",
+      "priority": 85,
+      "selector": { "paths": ["src/hooks/**"], "baseRoles": ["hook"] },
+      "effectiveRole": "application-hook",
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/hooks/common/table.ts", "detail": "Application table composition hook" }
+      ]
+    },
+    {
+      "id": "api-service",
+      "priority": 85,
+      "selector": { "paths": ["src/service/api/**"], "baseRoles": ["api-service"] },
+      "effectiveRole": "typed-api-service",
+      "architecture": ["api-facade"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/service/api/job.ts", "detail": "Named typed API functions using the request wrapper" }
+      ]
+    },
+    {
+      "id": "app-request-client",
+      "priority": 85,
+      "selector": { "paths": ["src/service/request/**"], "baseRoles": ["request-client"] },
+      "effectiveRole": "application-request-client",
+      "architecture": ["http-adapter"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/service/request/index.ts", "detail": "Application request instance and auth/error policies" }
+      ]
+    },
+    {
+      "id": "pinia-setup-store",
+      "priority": 85,
+      "selector": { "paths": ["src/store/modules/**"], "baseRoles": ["pinia-store"] },
+      "effectiveRole": "pinia-setup-store",
+      "architecture": ["application-state"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/store/modules/app/index.ts", "detail": "Setup-style defineStore module" }
+      ]
+    },
+    {
+      "id": "application-router",
+      "priority": 85,
+      "selector": { "paths": ["src/router/**"], "baseRoles": ["router"] },
+      "effectiveRole": "application-router",
+      "architecture": ["vue-router"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "src/router/index.ts", "detail": "Vue Router instance and setup" }
+      ]
+    },
+    {
+      "id": "workspace-request-client",
+      "priority": 100,
+      "selector": {
+        "paths": ["packages/axios/**", "packages/alova/**", "packages/ofetch/**"],
+        "baseRoles": ["request-client"]
+      },
+      "effectiveRole": "workspace-request-client",
+      "architecture": ["workspace-library"],
+      "tags": ["package-boundary"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "packages/axios/src/index.ts", "detail": "Reusable Axios request package" }
+      ]
+    },
+    {
+      "id": "workspace-hook",
+      "priority": 95,
+      "selector": { "paths": ["packages/hooks/**"], "baseRoles": ["hook"] },
+      "effectiveRole": "workspace-hook",
+      "architecture": ["workspace-library"],
+      "tags": ["package-boundary"],
+      "confidence": "high",
+      "evidence": [
+        { "kind": "source", "path": "packages/hooks/src/use-table.ts", "detail": "Reusable workspace hook" }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "app-layering",
+      "category": "architecture",
+      "title": "Application UI layering",
+      "summary": "Route pages, route-local modules, shared components, layouts, hooks, stores, routers, API services, and request clients are separate evidence roles.",
+      "strength": "hard",
+      "selector": { "paths": ["src/**"] },
+      "source": "agent-draft"
+    },
+    {
+      "id": "request-layering",
+      "category": "architecture",
+      "title": "Request layering",
+      "summary": "src/service/api exposes typed endpoint functions; src/service/request owns application auth/error policy; packages/axios owns reusable HTTP infrastructure.",
+      "strength": "hard",
+      "selector": { "paths": ["src/service/**", "packages/axios/**"] },
+      "source": "agent-draft"
+    },
+    {
+      "id": "workspace-boundary",
+      "category": "architecture",
+      "title": "Workspace package boundary",
+      "summary": "packages/* are independent workspace modules and should prefer peers from the same package rather than main-application files.",
+      "strength": "hard",
+      "selector": { "paths": ["packages/**"] },
+      "source": "agent-draft"
+    }
+  ],
+  "conventions": [
+    {
+      "id": "api-named-functions",
+      "category": "api-export-style",
+      "statement": "Expose application API endpoints as named typed functions using the shared request wrapper.",
+      "strength": "advisory",
+      "selector": { "paths": ["src/service/api/**"], "baseRoles": ["api-service"] },
+      "evidence": [
+        { "kind": "source", "path": "src/service/api/job.ts", "detail": "Repeated named fetch functions" }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "pinia-setup-style",
+      "category": "store-style",
+      "statement": "Use setup-style defineStore modules for application state stores.",
+      "strength": "advisory",
+      "selector": { "paths": ["src/store/modules/**"], "baseRoles": ["pinia-store"] },
+      "evidence": [
+        { "kind": "source", "path": "src/store/modules/app/index.ts", "detail": "Setup-style store implementation" }
+      ],
+      "source": "agent-draft"
+    }
+  ]
+}

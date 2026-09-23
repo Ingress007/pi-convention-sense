@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "mode": "observe",
+  "minEvidenceFiles": 2,
+  "maxEvidenceFiles": 4,
+  "maxContextTokens": 1200,
+  "scopeStrategy": "module-role",
+  "includeLanguages": ["java"],
+  "exclude": [
+    "**/generated/**",
+    "**/build/**",
+    "**/target/**",
+    "**/vendor/**",
+    "**/node_modules/**"
+  ],
+  "injectContext": true,
+  "persistSessionState": true,
+  "logPath": ".pi/convention-sense/observe.ndjson",
+  "guard": {
+    "pathExceptions": [],
+    "allowBypass": true,
+    "requireRecentContext": true,
+    "contextWindowTurns": 2,
+    "contextMaxAgeMs": 600000
+  },
+  "postChangeAudit": {
+    "enabled": true,
+    "notify": true,
+    "maxChangedFiles": 100
+  },
+  "toolMappings": [],
+  "logging": {
+    "level": "info",
+    "explainRanking": true
+  }
+}

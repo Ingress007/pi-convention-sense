@@ -1,0 +1,613 @@
+{
+  "schemaVersion": 1,
+  "profileVersion": "0.1.0",
+  "project": {
+    "name": "pi-convention-sense",
+    "repositoryRoot": "."
+  },
+  "generatedAt": "2026-09-23T02:43:30.379Z",
+  "generatedBy": "agent",
+  "review": {
+    "status": "draft"
+  },
+  "technologies": [
+    {
+      "id": "typescript",
+      "kind": "language",
+      "version": "5.9.3",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "package.json",
+          "detail": "TypeScript 5.9.3 is the pinned development compiler."
+        }
+      ]
+    },
+    {
+      "id": "nodejs",
+      "kind": "infrastructure",
+      "version": ">=22.19.0",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "package.json",
+          "detail": "The package engine requires Node.js 22.19.0 or newer."
+        }
+      ]
+    },
+    {
+      "id": "pi-coding-agent",
+      "kind": "framework",
+      "version": "0.85.1",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "package.json",
+          "detail": "Pi 0.85.1 is pinned for development and constrained by the peer dependency range."
+        }
+      ]
+    },
+    {
+      "id": "node-next-esm",
+      "kind": "architecture",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "config",
+          "path": "tsconfig.json",
+          "detail": "The compiler uses NodeNext module and moduleResolution with strict type checking."
+        }
+      ]
+    },
+    {
+      "id": "npm-typescript-build",
+      "kind": "build",
+      "confidence": "high",
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "package.json",
+          "detail": "npm scripts define clean, build, check, test, and verify gates."
+        }
+      ]
+    }
+  ],
+  "packs": [],
+  "modules": [
+    {
+      "id": "extension-entry",
+      "title": "Pi Extension entry and lifecycle orchestration",
+      "priority": 100,
+      "selector": {
+        "paths": [
+          "extensions/**"
+        ]
+      },
+      "architecture": [
+        "pi-extension",
+        "lifecycle-orchestrator"
+      ],
+      "knowledgeRefs": [
+        "extension-orchestration",
+        "logging-privacy"
+      ],
+      "conventionRefs": [
+        "node-next-import-specifiers"
+      ]
+    },
+    {
+      "id": "runtime-core",
+      "title": "Configuration, state, context, logging, and status runtime",
+      "priority": 95,
+      "selector": {
+        "paths": [
+          "src/runtime/**"
+        ]
+      },
+      "architecture": [
+        "branch-local-runtime"
+      ],
+      "knowledgeRefs": [
+        "branch-local-state",
+        "logging-privacy"
+      ],
+      "conventionRefs": [
+        "node-next-import-specifiers"
+      ]
+    },
+    {
+      "id": "observe-engine",
+      "title": "Repository-scoped convention analysis",
+      "priority": 90,
+      "selector": {
+        "paths": [
+          "src/observe/**"
+        ]
+      },
+      "architecture": [
+        "deterministic-analysis",
+        "local-evidence"
+      ],
+      "knowledgeRefs": [
+        "local-evidence-pipeline",
+        "repository-isolation"
+      ],
+      "conventionRefs": [
+        "node-next-import-specifiers"
+      ]
+    },
+    {
+      "id": "guard-engine",
+      "title": "Discovery-only Guard and post-change audit",
+      "priority": 90,
+      "selector": {
+        "paths": [
+          "src/guard/**"
+        ]
+      },
+      "architecture": [
+        "guard",
+        "fail-open"
+      ],
+      "knowledgeRefs": [
+        "guard-discovery-only"
+      ],
+      "conventionRefs": [
+        "node-next-import-specifiers"
+      ]
+    },
+    {
+      "id": "profile-runtime",
+      "title": "Project Profile, Pack, and Knowledge Capsule runtime",
+      "priority": 90,
+      "selector": {
+        "paths": [
+          "src/profile/**"
+        ]
+      },
+      "architecture": [
+        "project-intelligence",
+        "trust-boundary"
+      ],
+      "knowledgeRefs": [
+        "project-intelligence-layers",
+        "repository-isolation"
+      ],
+      "conventionRefs": [
+        "node-next-import-specifiers"
+      ]
+    },
+    {
+      "id": "project-profiler",
+      "title": "Project Profiler Skill and deterministic helpers",
+      "priority": 85,
+      "selector": {
+        "paths": [
+          "skills/project-profiler/**"
+        ]
+      },
+      "architecture": [
+        "agent-skill",
+        "candidate-review-adopt"
+      ],
+      "knowledgeRefs": [
+        "profile-lifecycle",
+        "no-second-model-runtime"
+      ]
+    },
+    {
+      "id": "evaluation-tools",
+      "title": "Reusable repository evaluation scripts",
+      "priority": 80,
+      "selector": {
+        "paths": [
+          "scripts/**"
+        ]
+      },
+      "architecture": [
+        "evaluation-tooling"
+      ],
+      "knowledgeRefs": [
+        "file-lifecycle"
+      ]
+    },
+    {
+      "id": "tests",
+      "title": "Node test suites and deterministic fixtures",
+      "priority": 75,
+      "selector": {
+        "paths": [
+          "test/**"
+        ]
+      },
+      "architecture": [
+        "node-test",
+        "fixture-driven"
+      ],
+      "knowledgeRefs": [
+        "verification-gate"
+      ],
+      "conventionRefs": [
+        "node-next-import-specifiers"
+      ]
+    },
+    {
+      "id": "documentation",
+      "title": "Requirements, design, lifecycle, compatibility, and evaluations",
+      "priority": 70,
+      "selector": {
+        "paths": [
+          "README.md",
+          "CHANGELOG.md",
+          "docs/**"
+        ]
+      },
+      "architecture": [
+        "project-documentation"
+      ],
+      "knowledgeRefs": [
+        "file-lifecycle",
+        "verification-gate"
+      ]
+    }
+  ],
+  "scopeOverrides": [],
+  "knowledge": [
+    {
+      "id": "extension-orchestration",
+      "category": "architecture",
+      "title": "Extension orchestration boundary",
+      "summary": "extensions/index.ts is the Pi integration boundary. It wires lifecycle events, commands, runtime state, Observe, Guard, Profile resolution, context injection, and safe logging; domain logic remains in src submodules.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "extensions/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "extensions/index.ts",
+          "detail": "Registers session, agent, tool, branch, shutdown hooks and convention commands."
+        },
+        {
+          "kind": "documentation",
+          "path": "docs/design.md",
+          "detail": "Defines Extension as the core product boundary and Skill as auxiliary tooling."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "local-evidence-pipeline",
+      "category": "architecture",
+      "title": "Deterministic Local Evidence pipeline",
+      "summary": "Observe resolves the target repository, detects language and scope, ranks same-repository peers, extracts repeated facts, and emits a bounded Snapshot. Unsupported, excluded, missing, or failed analysis returns an explicit reason instead of escaping into the Pi lifecycle.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "src/observe/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "src/observe/analyzer.ts",
+          "detail": "ObserveAnalyzer handles Java and TypeScript/Vue targets with explicit result reasons."
+        },
+        {
+          "kind": "documentation",
+          "path": "docs/stage-1-observe.md",
+          "detail": "Documents Scope, Candidate, Evidence, Snapshot, Context, and freshness stages."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "guard-discovery-only",
+      "category": "security",
+      "title": "Guard blocks discovery gaps, not style differences",
+      "summary": "Guard may block a mutation while target reads, Snapshot freshness, or recent Context are missing. Unsupported targets, excluded paths, low confidence, weak evidence, analysis failure, and exhausted peers fail open; style disagreement alone is never a block reason.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "src/guard/**",
+          "extensions/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "src/guard/convention-guard.ts",
+          "detail": "evaluateConventionGuard returns explicit allow/block reason codes and fail-open decisions."
+        },
+        {
+          "kind": "documentation",
+          "path": "docs/stage-2-guard.md",
+          "detail": "Defines Guard as experimental, explicit opt-in, and discovery-only."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "project-intelligence-layers",
+      "category": "architecture",
+      "title": "Three project-intelligence layers",
+      "summary": "Global Packs provide advisory baselines, Project Profile provides reviewable repository knowledge, and Local Evidence provides current scoped code facts. Full Profiles are not injected; the runtime resolves a bounded Knowledge Capsule for the active target.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "src/profile/**",
+          "skills/project-profiler/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "documentation",
+          "path": "docs/project-intelligence.md",
+          "detail": "Defines Pack, Profile, Local Evidence, precedence, trust, and capsule semantics."
+        },
+        {
+          "kind": "source",
+          "path": "src/profile/profile-resolver.ts",
+          "detail": "Resolves matching modules, roles, knowledge, conventions, and Pack items."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "repository-isolation",
+      "category": "security",
+      "title": "Repository and Profile trust isolation",
+      "summary": "Candidate discovery is limited to the target Git repository. A Project Profile is loaded only for the trusted Pi startup repository; an external repository Profile is ignored even when its target files are analyzed.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "src/observe/**",
+          "src/profile/**",
+          "extensions/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "src/profile/profile-loader.ts",
+          "detail": "loadProjectProfile returns ignored when the project is not trusted."
+        },
+        {
+          "kind": "source",
+          "path": "src/observe/repository-root.ts",
+          "detail": "Resolves repository roots for targets."
+        },
+        {
+          "kind": "source",
+          "path": "test/extension.test.ts",
+          "detail": "Covers external repository Profile trust isolation."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "branch-local-state",
+      "category": "data",
+      "title": "Branch-local checkpoint state",
+      "summary": "Successful reads, recent reads, mutations, counters, bypass and audit state are restored from the latest compatible checkpoint on the active Session branch. Reset appends an empty checkpoint so cleared state is not restored after restart.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "src/runtime/**",
+          "extensions/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "src/runtime/state.ts",
+          "detail": "Migrates v1/v2 checkpoints and restores v3 branch state."
+        },
+        {
+          "kind": "source",
+          "path": "extensions/index.ts",
+          "detail": "The convention-reset command clears runtime state and appends an empty checkpoint."
+        },
+        {
+          "kind": "source",
+          "path": "test/extension.test.ts",
+          "detail": "Reset behavior and branch recovery are integration tested."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "logging-privacy",
+      "category": "security",
+      "title": "Metadata-only runtime logging",
+      "summary": "Runtime logs may contain event metadata, normalized paths, counts, reason codes, fingerprints, and durations. They must not contain source text, edit/write bodies, complete prompts, or complete shell commands.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "extensions/**",
+          "src/runtime/**",
+          "src/guard/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "extensions/index.ts",
+          "detail": "Tool inputs and lifecycle events are summarized before logging."
+        },
+        {
+          "kind": "source",
+          "path": "src/runtime/logger.ts",
+          "detail": "Writes structured NDJSON event records."
+        },
+        {
+          "kind": "documentation",
+          "path": "docs/design.md",
+          "detail": "Defines the log privacy boundary."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "profile-lifecycle",
+      "category": "workflow",
+      "title": "Candidate-review-adopt Profile lifecycle",
+      "summary": "Profiler writes profile.candidate.json, validates and fingerprints it, shows a semantic diff, and only replaces profile.json after explicit approval. Agent-generated Profiles start as draft; reviewed status requires explicit human review metadata.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "skills/project-profiler/**",
+          ".convention-sense/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "documentation",
+          "path": "skills/project-profiler/SKILL.md",
+          "detail": "Defines init, adopt, refresh, diff, trust, validation, and approval rules."
+        },
+        {
+          "kind": "source",
+          "path": "skills/project-profiler/scripts/profile-tools.mjs",
+          "detail": "Provides deterministic validate, fingerprint, and semantic diff commands."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "verification-gate",
+      "category": "workflow",
+      "title": "Executable verification remains authoritative",
+      "summary": "Source changes are validated with npm run verify, which runs strict TypeScript checking, a clean build, and the Node test suites. Package-facing changes also require npm pack --dry-run; CI repeats verification across Windows and Ubuntu on supported Node 22 versions.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "extensions/**",
+          "src/**",
+          "test/**",
+          "package.json",
+          ".github/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "manifest",
+          "path": "package.json",
+          "detail": "Defines check, build, test, and verify scripts."
+        },
+        {
+          "kind": "config",
+          "path": ".github/workflows/ci.yml",
+          "detail": "Runs verify and package checks on the compatibility matrix."
+        },
+        {
+          "kind": "documentation",
+          "path": "docs/compatibility.md",
+          "detail": "Records tested and untested environments."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "file-lifecycle",
+      "category": "workflow",
+      "title": "Permanent, runtime, and temporary files are separated",
+      "summary": "Source, tests, examples, skills, reusable scripts, and reviewed evaluation conclusions are versioned. dist, node_modules, .pi/convention-sense, .tmp, logs, and Profile candidates are local and reproducible or transient.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "docs/**",
+          "scripts/**",
+          "examples/**",
+          ".gitignore"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "documentation",
+          "path": "docs/file-lifecycle.md",
+          "detail": "Defines repository and target-project file lifecycles."
+        },
+        {
+          "kind": "config",
+          "path": ".gitignore",
+          "detail": "Excludes reproducible and local runtime outputs."
+        }
+      ],
+      "source": "agent-draft"
+    },
+    {
+      "id": "no-second-model-runtime",
+      "category": "dependency",
+      "title": "Normal runtime does not call a second model",
+      "summary": "Convention detection, ranking, evidence extraction, Guard, Profile resolution, and formatting are deterministic local code. The Profiler Skill may explicitly use the current Agent to author a candidate, but normal coding turns do not invoke another LLM.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "extensions/**",
+          "src/**",
+          "skills/project-profiler/**"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "documentation",
+          "path": "docs/design.md",
+          "detail": "Defines Extension as deterministic runtime and Skill as explicit auxiliary authoring."
+        },
+        {
+          "kind": "documentation",
+          "path": "skills/project-profiler/SKILL.md",
+          "detail": "Requires use of the current Agent and prohibits calling another model."
+        }
+      ],
+      "source": "agent-draft"
+    }
+  ],
+  "conventions": [
+    {
+      "id": "node-next-import-specifiers",
+      "category": "module-imports",
+      "statement": "Use explicit .js specifiers for relative TypeScript imports so source compiles and runs under NodeNext ESM.",
+      "strength": "advisory",
+      "selector": {
+        "paths": [
+          "extensions/**/*.ts",
+          "src/**/*.ts",
+          "test/**/*.ts"
+        ],
+        "languages": [
+          "typescript"
+        ]
+      },
+      "evidence": [
+        {
+          "kind": "config",
+          "path": "tsconfig.json",
+          "detail": "Uses NodeNext module resolution."
+        },
+        {
+          "kind": "source",
+          "path": "extensions/index.ts",
+          "detail": "Relative source imports consistently use .js specifiers."
+        },
+        {
+          "kind": "source",
+          "path": "src/observe/analyzer.ts",
+          "detail": "Relative source imports consistently use .js specifiers."
+        },
+        {
+          "kind": "source",
+          "path": "src/profile/profile-loader.ts",
+          "detail": "Relative source imports consistently use .js specifiers."
+        }
+      ],
+      "source": "agent-draft"
+    }
+  ]
+}

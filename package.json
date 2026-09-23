@@ -1,0 +1,52 @@
+{
+  "name": "pi-convention-sense",
+  "version": "0.4.0-alpha.1",
+  "description": "Evidence-driven local convention awareness for Pi coding agents",
+  "type": "module",
+  "private": true,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "coding-agent",
+    "conventions"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "files": [
+    "extensions",
+    "src",
+    "docs",
+    "examples",
+    "skills",
+    "scripts",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/core.test.js dist/test/observe.test.js dist/test/guard.test.js dist/test/profile.test.js dist/test/extension.test.js",
+    "verify": "npm run check && npm test"
+  },
+  "dependencies": {
+    "minimatch": "10.2.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}
