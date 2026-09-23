@@ -1,9 +1,11 @@
 # pi-convention-sense V1 技术设计方案
 
 > 文档状态：方案草案（Draft）
-> 版本：V1.0
+> 版本：V1.1
 > 源文档标注更新日期：2026-09-17
+> 当前架构融合日期：2026-09-23
 > 对应需求文档：[requirements.md](./requirements.md)
+> Project Intelligence 深入设计：[project-intelligence.md](./project-intelligence.md)
 
 ## 1. 设计概述
 
@@ -12,17 +14,18 @@ pi-convention-sense 采用 **Pi Extension 为核心、Skill 为辅助** 的实�
 Extension 负责：
 
 - Pi 生命周期 Hook 接入；
-- Scope 识别；
-- 候选发现和排序；
+- Java、TypeScript 与 Vue Scope 识别；
+- repository/module/workspace 隔离的候选发现和排序；
 - Evidence 与 Snapshot 构建；
-- `context` 动态注入；
+- 受信 Project Profile 与 Global Pack 加载、解析和 fingerprint；
+- effective role、Knowledge Capsule 与 Local Evidence 的统一预算注入；
 - edit/write 前 Guard；
 - Session、Branch、Freshness 和运行时账本管理；
 - 可选后置审计。
 
-Skill 只承担用户或 Reviewer 显式触发的深度审计，不作为正常编码链路的强依赖。
+Project Profiler Skill 只承担用户显式触发的 Profile `init/adopt/refresh/diff` 流程，不作为正常编码链路的强依赖。它使用当前 Agent 生成 candidate，必须经过 validate、semantic diff 和显式批准，不能静默覆盖 active Profile。
 
-V1 采用确定性本地分析，不引入第二个 LLM，不生成永久规范，不自动重构，不修改 `AGENTS.md`。
+V1.1 的正常运行链路采用确定性本地分析，不引入第二个 LLM，不自动重构，也不根据单次观察修改 `AGENTS.md` 或 Project Profile。可版本控制的长期项目知识只通过显式 Profile 生命周期建立。
 
 ## 2. 可行性与 Pi API 边界
 
@@ -52,14 +55,23 @@ V1 采用确定性本地分析，不引入第二个 LLM，不生成永久规范�
 ```mermaid
 flowchart TD
     A["Pi Agent 生命周期"] --> B["Hook Adapter"]
-    B --> C["Scope 与候选发现"]
-    C --> D["Evidence / Snapshot"]
-    D --> E["Context 注入"]
+    T["受信启动仓库"] --> P["Project Profile Loader"]
+    K["Global Pack Catalog"] --> R["Profile Resolver"]
+    P --> R
+    B --> C["Language Adapter + Base Scope"]
+    C --> R
+    R --> S["Profiled Scope / Effective Role"]
+    S --> D["Repository-local Candidates + Local Evidence"]
+    D --> E["Snapshot"]
+    R --> Q["Knowledge Capsule"]
+    E --> X["Unified Context Budget"]
+    Q --> X
+    X --> G["Coding Agent"]
     B --> F["Convention Guard"]
-    E --> G["Coding Agent"]
     F --> G
-    G --> H["pi-lens / 测试"]
-    H --> I["可选 Review"]
+    G --> H["pi-lens / 编译 / 测试"]
+    J["Project Profiler Skill"] --> Y["Profile Candidate"]
+    Y --> P
 ```
 
 ### 3.1 组件职责
@@ -67,23 +79,28 @@ flowchart TD
 | 组件 | 职责 | 明确不负责 |
 | --- | --- | --- |
 | Hook Adapter | 订阅生命周期、标准化工具事件、触发内部服务 | 不推断具体惯例 |
-| Scope Detector | 基于语言、路径、文件名、注解和语法特征识别 Scope | 不选择最终规则 |
-| Candidate Finder | 按层级收集同类文件 | 不将所有文件注入上下文 |
-| Candidate Ranker | 对候选评分并选取 2～4 个 peer | 不判断业务正确性 |
+| Language Adapter / Scope Detector | 识别 Java、TypeScript、Vue 的 base role、module/workspace 和 confidence | 不把一个样本升级为规则 |
+| Project Profile Loader | 在受信启动仓库加载、校验并 fingerprint active Profile | 不自动读取任意外部仓库 Profile |
+| Pack Catalog / Profile Resolver | 解析 module、effective role、技术栈、knowledge 和 convention | Global Pack 不产生硬阻断 |
+| Candidate Finder / Ranker | 在目标 Git repository 内按 base/effective role 选择 2～4 个 peer | 不跨 related project 取候选 |
 | Evidence Builder | 提取确定性结构信号，计算支持率、反例和置信度 | 不输出绝对规范 |
-| Snapshot Cache | 按 Scope/Branch 缓存临时证据并校验 freshness | 不做跨项目长期记忆 |
-| Context Injector | 在 LLM 调用前注入紧凑证据 | 不修改项目文件 |
-| Convention Guard | edit/write 前校验发现流程是否充分 | 不承担正常 Discovery 主路径 |
+| Snapshot Cache | 按 repository/Scope/Branch 缓存临时证据并校验 freshness | 不保存长期项目知识 |
+| Capsule Formatter / Context Injector | 在统一 token 预算内注入目标相关知识和局部证据 | 不注入完整 Profile 或源码正文 |
+| Convention Guard | edit/write 前校验 Discovery 是否充分 | 不因 Profile/Pack/风格差异阻断 |
 | Post-change Auditor | 发现绕过前置 Guard 的变更和重大证据缺口 | 不自动重构 |
+| Project Profiler Skill | candidate-first 地创建和刷新可审核 Profile | 不进入每轮编码链路，不调用第二个模型 |
 
 ### 3.2 设计原则
 
 - 主路径是 Proactive Discovery，Guard 只兜底；
-- 只表达“证据支持的偏好”，不生成绝对规则；
+- 三层信息源为 Global Pack、Project Profile/Knowledge、Local Evidence；
+- Global Pack 永远 advisory，draft Profile 中的 hard 项运行时降级为 advisory；
+- Local Evidence 是当前 Scope 的代码事实，不自动回写 Profile；
+- 一个 Git repository 对应一个 Profile，Profile trust 只属于 Pi 启动仓库；
 - 先 Observe 收集数据，再开启 Guard；
-- 显式约束和可执行检查始终高于局部惯例；
+- 用户要求和可执行检查始终高于项目知识与局部惯例；
 - 默认 fail-open，分析异常不得破坏 Pi 主流程；
-- 所有结论可回溯到文件、样本数、支持率和反例。
+- 所有非平凡结论可回溯到 manifest、配置、源码、文档或用户审核证据。
 
 ## 4. 运行时流程
 
@@ -94,28 +111,34 @@ sequenceDiagram
     participant A as Agent
     participant P as Pi Hooks
     participant C as Convention Sense
+    participant R as Profile Resolver
     participant L as LLM
+    P->>C: session_start + trusted cwd
+    C->>R: load Profile + enabled Packs
     A->>P: read 目标源码
     P->>C: 成功的 tool_result
-    C->>C: Scope + Candidates + Evidence
-    C->>C: 缓存 Snapshot
-    P->>C: context
-    C-->>L: 注入相关 Snapshot
+    C->>C: repository + base Scope
+    C->>R: target descriptor
+    R-->>C: module/effective role/knowledge/fingerprint
+    C->>C: Candidates + Local Evidence + Snapshot
+    P->>C: before_agent_start/context
+    C-->>L: Knowledge Capsule + Local Snapshot
     L->>P: edit/write
-    P->>C: Guard 检查
+    P->>C: Guard 检查 Discovery
     C-->>P: allow
 ```
 
 处理步骤：
 
-1. Hook Adapter 从成功的读取类 `tool_result` 中解析真实文件路径。
-2. Read Ledger 写入读取记录。
-3. Scope Detector 识别目标文件的 language、module、role 和 root。
-4. Candidate Finder/Ranker 选出 Top K peer。
-5. Language Adapter 提取结构信号，Evidence Builder 聚合 Observation。
-6. Snapshot Cache 保存当前 Branch 下的 Snapshot。
-7. 下一次 `context` 事件由 Context Injector 注入相关 Snapshot。
-8. edit/write 的 `tool_call` 由 Guard 校验；条件满足则放行。
+1. `session_start` 从 Pi 启动仓库加载受信配置和 `.convention-sense/profile.json`，校验 Profile 与 Pack 引用并计算 fingerprint。
+2. Hook Adapter 只从成功的读取类 `tool_result` 中解析真实文件路径并写入 Read Ledger。
+3. 目标路径解析自己的 Git repository root；Language Adapter 识别 language、module/workspace、base role 和 confidence。
+4. Profile Resolver 仅在目标属于受信启动仓库时解析 matched module、effective role、architecture、tags、technology、knowledge 和 convention；外部仓库 Profile 状态为 `ignored`。
+5. Candidate Finder/Ranker 在目标 repository 内按语言、base role、effective role 和模块/package 边界选出 Top K peer。
+6. Language Adapter 提取结构信号，Evidence Builder 聚合 Observation。
+7. Snapshot Cache 保存当前 Branch 下的 Snapshot，并把 Profile fingerprint 与 active Pack id/version 纳入 freshness。
+8. 下一次 Context 在统一预算内注入目标相关 Knowledge Capsule 与 Local Snapshot，不注入完整 Profile。
+9. edit/write 的 `tool_call` 由 Guard 校验 Discovery；条件满足则放行。
 
 ### 4.2 证据不足路径
 
@@ -154,18 +177,21 @@ When modifying existing code:
 
 ```typescript
 interface ConventionScope {
-  language: string;
+  language: "java" | "typescript" | "vue";
   module: string;
-  role: string;
+  role: string;                 // base role
+  effectiveRole?: string;       // Profile/Pack refinement
+  architecture?: string[];
+  profileTags?: string[];
+  profileFingerprint?: string;
   root: string;
+  sourceRoot?: string;
+  packageName?: string;
   confidence: "high" | "medium" | "low";
 }
-
-type ScopeKey = `${string}:${string}:${string}`;
-// java:order:service-impl
 ```
 
-Cache Key 除 `ScopeKey` 外必须包含仓库和 Branch 语义，避免跨仓库或跨 Branch 串用。
+`scopeKey()` 使用 `effectiveRole ?? role`，但候选初筛仍先保持 base role 兼容，再隔离 effective role。Snapshot 同时记录 `repositoryRoot`，运行时状态按 Session Branch 隔离，避免跨仓库、跨 subtype 或跨 Branch 串用。
 
 ### 5.2 Evidence 和 Observation
 
@@ -196,24 +222,26 @@ Mixed 不必成为类型字段；实现可将其表示为低/中置信 Observati
 ```typescript
 interface ConventionSnapshot {
   scope: ConventionScope;
+  repositoryRoot: string;
   targetPath: string;
+  targetKind: "existing" | "prospective";
+  targetMtimeMs: number;
+  targetSize: number;
+  targetHash: string;
   observations: ConventionObservation[];
   evidenceFiles: EvidenceRef[];
+  candidates: RankedCandidate[];
+  projectContext?: ResolvedProjectContext;
   createdAt: number;
-  branchId?: string;
   status: "valid" | "weak" | "stale";
+  staleReason?: string;
   tokenEstimate: number;
+  analyzerVersion: string;
+  configFingerprint: string;
 }
 ```
 
-建议额外记录但不强制暴露给 Context：
-
-- `repositoryId`；
-- `configVersion`；
-- `analyzerVersion`；
-- `lastInjectedAt` 或上下文代次；
-- 候选评分明细；
-- 失效原因。
+`configFingerprint` 同时覆盖运行配置、Profile fingerprint 和 active Pack id/version。`projectContext` 保存解析结果而不是完整 Profile；格式化时只选择当前目标相关的 knowledge/convention。
 
 ### 5.4 运行时状态
 
@@ -246,6 +274,19 @@ interface RuntimeState {
 
 建议先用低成本文件名/路径判断，再在需要时读取有限源码信号提高置信度。
 
+TypeScript/Vue Adapter 已覆盖：
+
+- route page；
+- shared、route-local 与 layout-local component；
+- hook/composable；
+- API service 与 request client；
+- Pinia store；
+- router；
+- layout；
+- workspace package。
+
+Profile/Pack refinement 在 base Scope 之后执行。例如 Java `controller` 可细分为 `mvc-view-controller` 与 `rest-controller`，Vue `page` 可细分为项目特有的 `vue-page`。Selector 只能使用 path、language、module、base role、file name、annotation 和 dependency 等声明式白名单字段。
+
 ### 6.2 模块识别优先级
 
 1. 最近的模块构建文件或配置边界；
@@ -269,13 +310,16 @@ interface RuntimeState {
 
 ### 7.2 过滤规则
 
-- 扩展名/语言必须兼容；
+- 候选必须位于目标 Git repository，related project 只可作为 metadata；
+- 扩展名/语言与 base role 必须兼容；
+- Profile 生效后，候选必须与目标 effective role 兼容；
+- workspace 项目默认限制在同 package；
 - 排除目标文件本身；
 - 默认排除 generated、build、target、vendor、test fixture；
 - 默认 production code 优先；
 - 排除配置命中的路径；
 - 识别 deprecated/generated 信号并降权；
-- 默认分析上限为 4 个候选。
+- 最终 Evidence 默认使用 2～4 个候选；effective role 深分析使用有界初筛预算。
 
 ### 7.3 评分模型
 
@@ -366,7 +410,21 @@ Evidence Builder 必须保留 counterEvidence，不允许只展示支持样本�
 
 ### 9.1 注入格式
 
+Context 由两个相互独立、共享预算的块组成：
+
+1. `<project-knowledge>`：Profile Resolver 为当前目标选择的 module、effective role、technology、architecture、knowledge 与 convention；
+2. `<local-convention>`：当前 Scope 的真实 peer 与重复 Observation。
+
+Draft Profile 明确标记为 advisory；完整 Profile、源码正文和未匹配知识均不进入 Context。
+
 ```xml
+<project-knowledge profile=".convention-sense/profile.json" review="draft">
+Matched modules: server-web
+Effective role: rest-controller
+Knowledge:
+- [advisory/project-profile] Controller boundary: ...
+</project-knowledge>
+
 <local-convention scope="java:order:service-impl" confidence="high">
 Target:
 - OrderServiceImpl.java
@@ -485,8 +543,10 @@ reasonCode 示例：
 - 目标文件和 Evidence 文件是否仍存在；
 - `mtime` 是否变化；
 - 可选 content hash 是否变化；
-- Branch ID 是否一致；
-- 配置版本是否一致；
+- Branch 状态是否一致；
+- 配置 fingerprint 是否一致；
+- Profile fingerprint 是否一致；
+- active Pack id/version 是否一致；
 - 分析器版本是否一致。
 
 任一关键条件变化后：
@@ -550,6 +610,8 @@ appendEntry("convention-snapshot", snapshot)
 ```
 
 约束：配置只控制系统行为，不允许堆叠“Controller 必须怎样写”等编码规则。
+
+Project Profile 固定使用启动仓库下的 `.convention-sense/profile.json`，不通过运行配置指向任意外部路径。Profile 缺失、无效、未信任或目标位于外部仓库时 fail-open 到 base role 与 Local Evidence。Global Pack 只有被受信 Profile 显式启用后才生效，并且始终 advisory。
 
 配置加载建议：
 
@@ -737,20 +799,23 @@ Observe 模式至少记录：
 
 退出条件：误拦截率可接受，且不会造成工作流死循环。
 
-### 阶段 3：V1.1
+### 阶段 3：V1.1 Project Intelligence（已实现）
 
-- Session 持久化与 Branch 精确恢复；
-- Java 分析器增强；
-- 可选 Convention Review；
-- 诊断命令和简易状态查看。
+- v3 Session checkpoint、Branch 精确恢复和 `/convention-reset confirm`；
+- Project Profile trust gate、schema、fingerprint、module 与 effective role；
+- Global Pack catalog，且强制 advisory；
+- Knowledge Capsule 与 Local Snapshot 统一预算；
+- Project Profiler Skill 的 candidate → diff → approve → adopt 流程；
+- TypeScript/Vue Adapter 与 workspace package 隔离；
+- SnailJob 后端与前端全栈真实验证。
 
-### 阶段 4：V2
+### 阶段 4：后续产品化与扩展
 
-- TypeScript 等新语言；
-- `analysisMode: deterministic | hybrid | llm`；
-- 小模型只总结 Evidence，不读取全仓库；
-- Git 历史、AST、语义相似度增强；
-- 团队级指标和治理。
+- 更多真实开源仓库和跨项目兼容矩阵；
+- 更多语言/框架 Adapter 与可组合 Pack；
+- Pi 新版本兼容验证、CI 和发布自动化；
+- 在不调用第二个模型的前提下评估 AST、Git 历史和语义信号；
+- Guard 继续保持 experimental opt-in，达到真实准入门槛前不默认启用。
 
 ## 19. 已确定的设计决策
 
@@ -759,19 +824,25 @@ Observe 模式至少记录：
 - Snapshot 通过 `context` 临时注入，不写入 `AGENTS.md`；
 - V1 使用确定性分析，不调用第二个 LLM；
 - 局部惯例以 Evidence 表达，不生成绝对规则；
-- Cache Key 至少包含 language、module、role、仓库和 Branch 语义；
-- V1 首个语言适配器为 Java；
+- Cache Key 至少包含 language、module、effective/base role、仓库和 Branch 语义；
+- Java、TypeScript 与 Vue 使用独立确定性 Adapter；
+- Global Pack → Project Profile/Knowledge → Local Evidence 构成三层信息源；
+- 一仓库一 Profile，Profile trust 只按 Pi 启动仓库加载；
+- base role 保持跨项目兼容，effective role 隔离项目 subtype；
+- Profile/Pack fingerprint 参与 Snapshot freshness；
+- 完整 Profile 不注入，只生成目标相关 Knowledge Capsule；
+- Profile 更新必须 candidate-first，并经显式批准；
 - 默认先 Observe，真实评估后再 Guard；
 - pi-lens 负责机器可验证问题；
 - Shell 修改主要通过后置检测处理；
-- 配置文件只控制行为，不承载编码规范。
+- 配置文件只控制行为，项目知识写入声明式 Profile。
 
 ## 20. 技术待确认项与 Spike 结论
 
-### 20.1 阶段 0 已确认
+### 20.1 阶段 0 历史基线已确认
 
-- 目标基线为 Pi `0.85.1`、Node.js `>=22.19.0`；
-- 内置工具采用 `read/edit/write/bash/powershell` 及其 0.85.1 payload；
+- 阶段 0 的验证目标为 Pi `0.85.1`、Node.js `>=22.19.0`；
+- 当时内置工具采用 `read/edit/write/bash/powershell` 及其 0.85.1 payload；
 - 成功 read 只在 `tool_result` 入账，同批 pending read 不满足 Guard；
 - `context` 可注入不持久化的 custom message；
 - `tool_call` 可真实阻止 edit/write，阻止后文件保持不变；
@@ -814,9 +885,36 @@ Observe 模式至少记录：
 
 详见 [stage-2-guard.md](./stage-2-guard.md)。
 
-### 20.4 阶段 2 生产准入仍需确认
+### 20.4 阶段 3 已确认
 
-- 20～30 个真实企业任务中的 Top-K 认可率、Observation 准确率和潜在误拦截率；
+- Project Profile 仅在受信启动仓库加载，外部仓库 Profile 状态为 `ignored`；
+- Profile schema/root/selector 使用声明式白名单校验，并计算稳定 fingerprint；
+- 未审核 Profile 保持 `draft`，其中 hard 项运行时降级为 advisory；
+- Global Pack 仅作为 advisory baseline，必须由受信 Profile 显式启用；
+- base role 可由 module/annotation/path selector 细分为 effective role；
+- Profile、Pack id/version 与配置共同参与 Snapshot freshness；
+- Knowledge Capsule 只选择当前目标相关条目并与 Local Snapshot 共享预算；
+- Project Profiler 不调用第二个模型，active Profile 只能经 candidate、validate、diff 和显式批准更新；
+- TypeScript/Vue Adapter 已覆盖 page、component、hook、API、request、store、router、layout 和 workspace package；
+- SnailJob 后端/前端真实流程验证了 Profile + Pack + Local Evidence、repository/workspace 隔离与 Guard 主路径。
+
+详见 [project-intelligence.md](./project-intelligence.md)。
+
+### 20.5 Pi 0.87.1 兼容性已确认
+
+- 当前开发依赖、类型检查和自动测试基于 Pi `0.87.1`；
+- 按 Pi package 官方规范，`peerDependencies` 使用 `"*"`，但兼容声明只依据验证矩阵，不把 `*` 解释为全版本支持；
+- `context`、`session_start`、`session_tree`、`tool_call`、`tool_result`、`agent_settled` 和 `appendEntry()` 等既有 API 在 0.87.1 中继续可用；
+- 稳定指导改为由 `before_agent_start` 更新 normalized `systemPromptOptions.sections["pi-convention-sense"]`，不再返回完整 `systemPrompt`；
+- 动态 Snapshot 与 Knowledge Capsule 继续通过非持久化 custom `context` message 注入；
+- 独立 `--no-session` Pi 0.87.1 子进程已验证 `session_start → before_agent_start → context → agent_settled → session_shutdown`；
+- 0.87.1 下 strict TypeScript、clean build 和 56 个自动测试全部通过。
+
+详见 [compatibility.md](./compatibility.md)。
+
+### 20.6 Guard 生产准入仍需确认
+
+- 20～30 个更多真实任务中的 Top-K 认可率、Observation 准确率和潜在误拦截率；
 - 是否因真实误判升级完整 Java parser；
 - 与 pi-lens 同时安装后的重复拦截和死循环测试；
 - HEAD 变化、复杂 rename 和超大 dirty worktree 的真实项目表现；
@@ -835,4 +933,4 @@ Observe 模式至少记录：
 
 ## 22. 推荐下一步
 
-在用户准备的真实企业 Java 项目中保持 Observe/Shadow Guard，累计 20～30 个任务的候选排名、Observation 和 `wouldBlock` 指标；并安装 pi-lens 做组合验证。达到需求文档门槛后，再决定是否把实验 Guard 提升为可发布状态。
+以当前 Java + TypeScript/Vue + Project Intelligence 闭环为基线，优先完成目标 Pi 新版本兼容验证、更多不同组织结构的真实仓库矩阵以及 pi-lens 组合验证。继续保持 Observe 默认和 Guard experimental opt-in；达到跨项目真实任务门槛后，再决定 Guard 是否具备更广泛启用条件。

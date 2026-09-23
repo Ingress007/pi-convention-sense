@@ -4,7 +4,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { appendStableGuidance, buildDynamicContext, STABLE_GUIDANCE_MARKER } from "../src/runtime/context.js";
+import {
+  applyStableGuidanceSection,
+  buildDynamicContext,
+  STABLE_GUIDANCE_MARKER,
+  STABLE_GUIDANCE_SECTION,
+} from "../src/runtime/context.js";
 import { loadSpikeConfig } from "../src/runtime/config.js";
 import { evaluateGuard, recordGuardDecision } from "../src/runtime/guard.js";
 import { normalizeToolPath } from "../src/runtime/paths.js";
@@ -223,10 +228,13 @@ test("Stage 1 v2 checkpoints migrate with zeroed Stage 2 counters", () => {
 });
 
 test("stable guidance is idempotent and dynamic context disclaims real evidence", () => {
-  const once = appendStableGuidance("base");
-  const twice = appendStableGuidance(once);
-  assert.equal(once, twice);
-  assert.equal(once.split(STABLE_GUIDANCE_MARKER).length - 1, 1);
+  const sections: Record<string, string> = {};
+  applyStableGuidanceSection(sections);
+  applyStableGuidanceSection(sections);
+  assert.equal(Object.keys(sections).length, 1);
+  const stableSection = sections[STABLE_GUIDANCE_SECTION];
+  assert.ok(stableSection);
+  assert.equal(stableSection.split(STABLE_GUIDANCE_MARKER).length - 1, 1);
 
   const context = buildDynamicContext(loadSpikeConfig(tempProject(), true).config, createSpikeState());
   assert.match(context, /No valid convention snapshot/);

@@ -4,7 +4,16 @@
 
 ## [Unreleased]
 
-当前没有已规划但未归入开发版本的变更。
+### 变更
+
+- 将产品需求与技术设计同步到三层 Project Intelligence、Project Profile、Knowledge Capsule 和 TypeScript/Vue Adapter 的现行架构；
+- 将 Pi 当前开发基线从 `0.85.1` 升级到 `0.87.1`；按 Pi package 官方规范把 peer dependency 改为 `"*"`，同时仅声明已验证版本；
+- 稳定指导改用 0.87.1 normalized `systemPromptOptions.sections`，避免替换完整 system prompt。
+
+### 验证
+
+- Pi `0.87.1` 下 strict TypeScript、clean build 与 56 个自动测试全部通过；
+- 独立无 Session Pi `0.87.1` 子进程验证 Extension 加载、named prompt section、custom Context、Profile 加载及 settle/shutdown 生命周期。
 
 ## [0.4.0-alpha.1] - 2026-09-23
 

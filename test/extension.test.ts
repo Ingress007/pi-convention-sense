@@ -157,13 +157,26 @@ test("Guard blocks a pending read, releases confirmed no-peer targets, and keeps
   const runtime = registerConventionSenseSpike(harness.api);
   await harness.invoke("session_start", { type: "session_start", reason: "startup" });
 
-  const promptResult = await harness.invoke("before_agent_start", {
+  const promptEvent = {
     type: "before_agent_start",
     prompt: "change target",
     systemPrompt: "base-system",
-    systemPromptOptions: { selectedTools: ["read", "edit", "write"] },
-  });
-  assert.match(promptResult.systemPrompt, /Local Convention Evidence/);
+    systemPromptOptions: {
+      selectedTools: ["read", "edit", "write"],
+      toolSnippets: {},
+      toolGuidelines: {},
+      promptGuidelines: [],
+      appendSystemPrompt: "",
+      sections: {} as Record<string, string>,
+      contextFiles: [],
+      skills: [],
+    },
+  };
+  const promptResult = await harness.invoke("before_agent_start", promptEvent);
+  assert.equal(promptResult, undefined);
+  const stableSection = promptEvent.systemPromptOptions.sections["pi-convention-sense"];
+  assert.ok(stableSection);
+  assert.match(stableSection, /Local Convention Evidence/);
 
   const entryCountBeforeContext = harness.branchEntries.length;
   const emptyContext = await harness.invoke("context", { type: "context", messages: [] });

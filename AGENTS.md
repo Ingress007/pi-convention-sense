@@ -15,7 +15,7 @@
 当前基线：
 
 - Node.js `>=22.19.0`；
-- Pi `>=0.85.1 <0.86.0`，真实验证版本 `0.85.1`；
+- Pi 当前开发与真实生命周期验证基线为 `0.87.1`；package peer dependency 按 Pi 规范使用 `*`，不得据此宣称其他版本已验证；
 - TypeScript `5.9.3`，strict + NodeNext；
 - 开发版本 `0.4.0-alpha.1`，尚未发布；
 - 完整测试基线 `npm run verify`，56/56。

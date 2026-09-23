@@ -1,6 +1,7 @@
 # Project Intelligence：Global Pack、Project Profile 与 Local Evidence
 
 > 状态：Stage 3 Profile Runtime、Profiler Skill、TypeScript/Vue Adapter、最小内置 Pack catalog 与 SnailJob 全栈真实验证已完成
+> 主技术设计：[design.md](./design.md)
 > 首个垂直验证项目：SnailJob 后端与 `snail-job-admin` 前端
 > 数据模型：`src/profile/types.ts`
 
@@ -20,7 +21,7 @@ Profile Runtime 已完成：
 
 - 受信任项目的 `.convention-sense/profile.json` 加载、schema 校验、repository-root 隔离和内容 fingerprint；
 - module、selector、scope override、draft/reviewed 强度门控和 effective role 解析；
-- Analyzer `java-lexical-v4-project-profile` 按 effective role 过滤候选；
+- Analyzer `multi-lexical-v5-typescript-vue-profile` 按 base/effective role 过滤 Java、TypeScript 与 Vue 候选；
 - Profile fingerprint 与 Pack id/version 引用进入 Snapshot freshness；
 - 当前目标的 Knowledge Capsule 与 Local Snapshot 在统一 token 预算内注入；
 - Profile 缺失、未信任、无效或跨仓库时 fail-open 到既有 Local Evidence；
@@ -29,7 +30,7 @@ Profile Runtime 已完成：
 
 自动测试覆盖 Profile 正反例、MVC/REST effective role 隔离、Capsule 预算、TypeScript/Vue role 与 workspace 隔离、Extension/Guard/reset 生命周期、外部 Profile trust 隔离和安全日志。最新完整验证为 `npm run verify`，56/56 通过。
 
-当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈真实生命周期验证。下一阶段将制定 Pack/Adapter 贡献规范、兼容矩阵与跨项目质量门槛；当前不宣称覆盖其他客户端或未验证技术栈。
+当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈真实生命周期验证、Pack/Adapter 贡献规范和兼容矩阵。下一阶段扩展更多真实仓库、Pi 版本与技术栈矩阵；当前不宣称覆盖其他客户端或未验证技术栈。
 
 ## 2. 三层架构
 

@@ -1,10 +1,12 @@
 # pi-convention-sense 产品需求文档（PRD）
 
 > 文档状态：方案草案（Draft）
-> 版本：V1.0
+> 版本：V1.1
 > 源文档标注更新日期：2026-09-17
-> 适用对象：项目负责人、Pi Extension 开发者、企业后端开发者
+> 当前架构融合日期：2026-09-23
+> 适用对象：项目负责人、Pi Extension 开发者、企业 Web 前后端开发者
 > 原始资料：用户提供的 Notion 文档
+> Project Intelligence 深入设计：[project-intelligence.md](./project-intelligence.md)
 
 ## 1. 产品定义
 
@@ -17,7 +19,15 @@ pi-convention-sense 是运行在 Pi Agent 中的“局部代码惯例感知层�
 - AI 常在未阅读足够同类代码时直接修改；
 - 通用最佳实践不一定适合当前模块，盲目统一会扩大改动范围。
 
-产品形态采用 **Pi Extension 为核心、Skill 为辅助**：Extension 负责自动触发和主流程能力，Skill 仅用于可选的深度审计。
+产品形态采用 **Pi Extension 为核心、Skill 为辅助**：Extension 负责自动触发、确定性分析、Profile Runtime 和 Guard 主流程；Project Profiler Skill 仅用于用户显式触发的项目知识候选生成、语义 diff 和 adopt。
+
+当前产品使用三层信息源：
+
+1. Global Baseline Pack：可组合技术栈基线，永远 advisory；
+2. Project Profile / Knowledge：一仓库一份、可版本控制、可审核的长期项目知识；
+3. Local Evidence：当前 Scope 从真实 peer 动态提取的局部代码事实。
+
+一次 Local Evidence 不会自动写回 Project Profile。完整 Profile 不直接注入模型，只为当前目标解析有预算的 Knowledge Capsule。
 
 ## 2. 背景与问题
 
@@ -58,6 +68,9 @@ pi-convention-sense 是运行在 Pi Agent 中的“局部代码惯例感知层�
 - **G6 会话安全**：Session、Branch 或源文件变化后不错误复用 Snapshot。
 - **G7 渐进上线**：先 Observe，再 Guard，以真实任务评估准确率和误拦截率。
 - **G8 生态互补**：不重复 pi-lens 的编译/LSP/lint 能力，不替代 `AGENTS.md` 的硬约束。
+- **G9 项目知识可审核**：Project Profile 通过 candidate、validate、diff、显式批准和 adopt 建立，不静默覆盖。
+- **G10 技术栈可组合**：语言、框架、架构、持久化、Transport 和 Build/Test 能力通过 Adapter 与 advisory Pack 组合。
+- **G11 仓库信任隔离**：候选只来自目标 Git repository；Profile trust 只属于 Pi 启动仓库，不隐式扩展到外部路径。
 
 ## 4. 非目标
 
@@ -65,9 +78,10 @@ V1 明确不做：
 
 - 自动重构历史代码；
 - 自动生成或修改 `AGENTS.md`；
-- 自动把局部惯例沉淀为永久组织规范；
-- 跨项目学习或用户画像式长期记忆；
-- 使用第二个 LLM、Subagent 或外部模型服务；
+- 根据一次局部观察自动创建或覆盖永久项目规范；
+- 未经显式审核把 draft Profile 升级为 reviewed；
+- 跨项目学习、跨仓库候选复用或用户画像式长期记忆；
+- 正常编码链路使用第二个 LLM、Subagent 或外部模型服务；
 - 覆盖所有语言的完整 AST；
 - 提供复杂 UI；
 - 泛化评审设计优劣或架构先进性；
@@ -111,6 +125,18 @@ Agent 通过脚本修改源码。系统通过 Mutation Ledger、Git diff 或后�
 
 系统根据目标路径和文件名推断 Scope，搜索同 Role 的 peer 后建立 Snapshot。若仓库确实没有同类实现，则降级使用硬约束和仓库级证据，不得造成永久阻塞。
 
+### 6.7 Project Profile 细分同一 base role
+
+Java `@Controller` 与 `@RestController` 都可先识别为 base role `controller`。受信 Profile 再根据 module、annotation 和 path 将其细分为 `mvc-view-controller` 与 `rest-controller`，Candidate Finder 不混用两个 subtype。Profile 缺失或无效时 fail-open 回 base role 与 Local Evidence。
+
+### 6.8 TypeScript/Vue 与 workspace
+
+Agent 读取 Vue route page、route-local component、hook、API service、request client、Pinia store、router、layout 或 workspace package。系统识别独立 role，并优先从同 role、同 workspace package 选择 peer，避免主应用与可复用 package 混用。
+
+### 6.9 读取外部仓库
+
+Pi 从仓库 A 启动却读取仓库 B 的绝对路径时，候选仍严格限制在 B 的 Git repository；A 的 Profile 不应用到 B，B 的 Profile 即使存在也标记为 `ignored`。用户必须从 B 根目录显式批准并启动新的 Pi 才能加载 B 的 Profile。
+
 ## 7. 功能需求
 
 | 编号 | 优先级 | 需求 | 验收要点 |
@@ -127,7 +153,14 @@ Agent 通过脚本修改源码。系统通过 Mutation Ledger、Git diff 或后�
 | FR-10 | P1 | 记录修改账本 | 可追踪目标文件、Scope、修改方式及是否具备有效 Evidence |
 | FR-11 | P1 | 任务结束后输出可选审计结果 | 只报告重大惯例偏离或证据缺口，不评价是否采用“更先进模式” |
 | FR-12 | P1 | 支持项目级行为配置 | 控制模式、阈值、文件数、排除路径和上下文预算，不承载编码规则 |
-| FR-13 | P2 | 提供可选深度审计 Skill | 可由用户或 Reviewer 显式调用，不成为正常编码链路的强依赖 |
+| FR-13 | P2 | 提供 Project Profiler Skill | 支持 init/adopt/refresh/diff；candidate-first，显式批准后才更新 active Profile |
+| FR-14 | P0 | 加载受信 Project Profile | 校验 schema、repository root、selector 白名单和 fingerprint；missing/invalid/ignored 时 fail-open |
+| FR-15 | P0 | 支持 Global Pack catalog | Pack 由 Profile 显式启用，id/version 参与 freshness，任何 hard 项均降级为 advisory |
+| FR-16 | P0 | 支持 effective role | 保留 base role，并用 Profile/Pack selector 隔离项目 subtype 候选 |
+| FR-17 | P0 | 注入 Knowledge Capsule | 只注入当前目标匹配的 module/technology/knowledge/convention；与 Snapshot 共享 token 预算 |
+| FR-18 | P0 | 支持 TypeScript/Vue Adapter | 覆盖 page、component、hook、API、request、store、router、layout 和 workspace package |
+| FR-19 | P0 | 强制 repository/Profile trust 隔离 | 不跨仓库取 peer，不从当前会话隐式加载外部仓库 Profile |
+| FR-20 | P1 | 提供 Profile/Pack 状态诊断 | `/convention-status` 展示 config source、Profile status/review/fingerprint、active Packs 和 diagnostics |
 
 ## 8. Scope 与候选要求
 
@@ -135,13 +168,16 @@ Agent 通过脚本修改源码。系统通过 Mutation Ledger、Git diff 或后�
 
 每个目标至少按以下维度识别：
 
-- `language`：语言；
-- `module`：模块；
-- `role`：代码角色；
+- `language`：Java、TypeScript 或 Vue；
+- `module`：Maven/Gradle module、业务边界或 workspace package；
+- `role`：语言 Adapter 给出的 base role；
+- `effectiveRole`：可选的 Profile/Pack 项目 subtype；
+- `architecture` / `profileTags`：可选目标上下文；
+- `profileFingerprint`：参与 Snapshot freshness；
 - `root`：作用域根目录；
 - `confidence`：识别置信度。
 
-V1 的 Scope Key 语义为 `language:module:role`，例如 `java:order:service-impl`。
+Scope Key 使用 `language:module:(effectiveRole ?? role)`。候选兼容性先保持 base role，再在 Profile 生效时隔离 effective role。
 
 ### 8.2 Java V1 角色
 
@@ -156,14 +192,35 @@ V1 的 Scope Key 语义为 `language:module:role`，例如 `java:order:service-i
 
 识别时可结合 package、注解、接口/继承关系等信号提高置信度。
 
-### 8.3 候选约束
+### 8.3 TypeScript/Vue 角色
 
-- 与目标文件语言/扩展名一致；
+- route page；
+- shared、route-local 与 layout-local component；
+- hook/composable；
+- API service；
+- application/workspace request client；
+- Pinia store；
+- router；
+- layout；
+- workspace package。
+
+Workspace package 默认是候选边界。Generated declaration、build output、vendor 和 test 文件不进入 production Evidence。
+
+### 8.4 Profile refinement
+
+Profile selector 只能使用声明式白名单字段：paths、excludePaths、languages、modules、baseRoles、fileNames、annotationsAny、dependenciesAny。禁止脚本、命令、可执行正则和未知字段。多个 override 按 priority 与 selector specificity 稳定选择。
+
+### 8.5 候选约束
+
+- 候选必须位于目标文件所属 Git repository；
+- 与目标文件语言/扩展名和 base role 一致；
+- Profile 生效时还必须与 effective role 兼容；
+- workspace 项目默认不跨 package；
 - 默认排除 generated、build、target、vendor、test fixture 等路径；
 - 目标文件本身不计入 peer；
 - 默认优先 production code；
 - 同 Scope 候选不足时，按同目录、同模块、邻近模块、仓库级同 Role 逐层扩大；
-- 默认最多分析 4 个候选；
+- 最终默认选择 2～4 个候选；
 - 候选不足时标记 weak，不得伪造高置信度结论。
 
 ## 9. Evidence 与置信度要求
@@ -231,21 +288,25 @@ V1 不尝试仅靠正则判断复杂业务语义、领域建模优劣或方法�
 系统应按以下顺序处理冲突：
 
 1. 用户当前明确需求；
-2. 项目硬约束（`AGENTS.md`、架构与安全规则）；
-3. 编译器、Linter、类型系统、安全检查和测试；
-4. 当前 Scope 内多文件重复出现的局部惯例；
-5. 更广泛的仓库惯例；
-6. 通用最佳实践。
+2. 安全边界、编译器、Linter、类型系统和测试；
+3. `AGENTS.md` 等明确项目约束；
+4. reviewed Project Profile 中的 hard knowledge；
+5. 当前 Scope 内多文件 Local Evidence；
+6. reviewed advisory Profile；
+7. draft Profile；
+8. Global Pack；
+9. 通用最佳实践。
 
-局部惯例是偏好证据，不是绝对规则。代码风格混杂、样本不足或证据冲突时必须降低置信度。
+Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降级为 advisory。Local Evidence 是当前代码事实，不是自动生成永久规则的依据；与 reviewed hard knowledge 冲突时保留双方来源并提示，不静默覆盖。
 
 ## 12. 非功能需求
 
 - **性能**：首次 Scope 发现的额外本地分析目标为亚秒到低秒级；不得每轮扫描全仓库。
 - **Token**：单个 Snapshot 默认不超过 1200 tokens，仅包含必要证据和路径引用。
 - **可靠性**：分析失败不破坏 Pi 主流程；Observe 降级为日志；Guard 返回可操作说明。
-- **隐私**：V1 不向独立模型或外部服务发送源码。
-- **可解释性**：每个 Observation 可回溯到 Evidence 文件、支持比例和反例。
+- **隐私**：正常运行不向独立模型或外部服务发送源码；日志不记录源码、edit/write 正文、完整 prompt 或完整 Shell 命令。
+- **信任隔离**：Profile 只从受信启动仓库加载；外部仓库路径不会隐式扩大信任。
+- **可解释性**：Observation 可回溯到 Evidence；Profile knowledge/convention 可回溯到 manifest、config、source、documentation 或 user-review。
 - **可配置性**：支持仓库级启停、模式、排除路径、候选数和阈值配置。
 - **兼容性**：不侵入 Pi Core，只使用公开 Extension API。
 - **可测试性**：Scope、Ranker、Evidence、Cache、Formatter、Guard 可独立测试。
@@ -289,6 +350,18 @@ V1 不尝试仅靠正则判断复杂业务语义、领域建模优劣或方法�
 - [x] 支持项目级禁用和明确 bypass；
 - [ ] 与并行 Tool Call、pi-lens 组合时无死循环（并行已验证，等待真实 pi-lens 联调）。
 
+### 14.3 Project Intelligence 附加标准
+
+- [x] Profile trust、schema、repository root、selector 和 fingerprint 有正反例测试；
+- [x] draft hard 与 Global Pack hard 均降级为 advisory；
+- [x] Profile effective role 能隔离 MVC/REST 等相邻 subtype；
+- [x] Knowledge Capsule 只包含目标相关知识并遵守预算；
+- [x] Profile/Pack 变化使旧 Snapshot stale；
+- [x] TypeScript/Vue role 与 workspace package 隔离有 fixture 和 Extension 测试；
+- [x] 外部 repository Profile 为 `ignored`，且候选仍限制在外部目标 repository；
+- [x] Profiler helper 支持 validate、fingerprint 和 semantic diff；
+- [x] SnailJob 后端与前端完成 Profile + Pack + Local Evidence 全栈验证。
+
 ## 15. 评估指标
 
 | 指标 | V1 建议目标 |
@@ -302,11 +375,11 @@ V1 不尝试仅靠正则判断复杂业务语义、领域建模优劣或方法�
 
 ## 16. 发布范围与优先级
 
-1. **阶段 0：技术 Spike**：验证 Pi 事件 payload、工具名、并行工具、context、block、Branch 和 `agent_settled`。
-2. **阶段 1：V1 Observe**：Java Scope、候选排序、确定性 Evidence、Context 注入、Ledger、内存 Cache、指标。
-3. **阶段 2：V1 Guard**：edit/write Guard、补救提示、bypass、fail-open、pi-lens 联调、Shell 后置检查。
-4. **阶段 3：V1.1**：Session 持久化、Branch 精确恢复、Java 分析增强、可选 Review 和诊断命令。
-5. **阶段 4：V2**：TypeScript、新分析模式、受控小模型总结、AST/语义/Git 历史增强、团队治理指标。
+1. **阶段 0：技术 Spike**：验证 Pi 事件 payload、工具名、并行工具、Context、block、Branch 和 `agent_settled`。
+2. **阶段 1：V1 Observe**：Java Scope、候选排序、确定性 Evidence、Context 注入、Ledger、Cache 和指标。
+3. **阶段 2：V1 Guard**：edit/write Guard、补救提示、bypass、fail-open、pi-lens 联调和 Shell 后置检查。
+4. **阶段 3：V1.1 Project Intelligence**：v3 checkpoint、Profile/Pack/effective role、Knowledge Capsule、Profiler Skill、TypeScript/Vue Adapter 和全栈验证。
+5. **阶段 4：产品化与扩展**：新 Pi 版本兼容矩阵、更多真实仓库、更多 Adapter/Pack、CI/发布自动化和 Guard 准入评估。
 
 ## 17. 主要风险
 
@@ -318,21 +391,23 @@ V1 不尝试仅靠正则判断复杂业务语义、领域建模优劣或方法�
 | Guard 打断工作流 | 用户体验下降 | 先 Observe、默认 fail-open、bypass、明确补救路径 |
 | 并行工具竞态 | 误判已读取 | 仅成功 `tool_result` 进入 Ledger |
 | Shell 绕过 | 前置检查缺失 | Mutation Ledger、Git diff、`agent_settled` 后置审计 |
-| Session/Branch 污染 | 注入错误证据 | Branch ID、失效重建、V1 不跨 Session 长期复用 |
-| Pi API 变化 | Extension 失效 | Spike、兼容层、集成测试矩阵 |
+| Session/Branch 污染 | 注入错误证据 | Branch checkpoint、失效重建、不跨 Branch 复用动态授权 |
+| Profile 信任扩大 | 外部仓库知识进入当前会话 | Profile 只按受信启动仓库加载；外部状态为 `ignored` |
+| Profile/Pack 过度权威 | 通用规则覆盖真实项目 | draft hard 与 Global Pack hard 降级，Guard 不因风格差异阻断 |
+| Pi API 变化 | Extension 失效 | Spike、精确开发依赖、CI 和真实 Pi 生命周期矩阵；peer `*` 不作为兼容证据 |
 
 ## 18. 待确认事项与阶段 0/1 决策
 
 | 事项 | 状态 | 当前结论 |
 | --- | --- | --- |
-| Pi Agent 目标版本和最小兼容版本 | 已决 | 当前基线为 `0.85.1`，未验证前不声明兼容 `0.86` |
-| read/edit/write/bash 工具名称与 payload | 已决 | 采用 0.85.1 内置 `read/edit/write/bash/powershell` 的导出类型 |
+| Pi Agent 目标版本和兼容声明 | 已决 | 当前开发、类型检查与真实生命周期基线为 `0.87.1`；按 Pi package 规范使用 peer `*`，但不据此声明其他版本已验证 |
+| read/edit/write/bash 工具名称与 payload | 已决 | 采用 0.87.1 内置 `read/edit/write/bash/powershell` 的导出类型 |
 | 成功读取的入账时机 | 已决 | 仅成功 `tool_result` 入账；pending sibling read 不计 Evidence |
 | Guard 默认降级策略 | 已决 | 默认 Observe 和 fail-open；Guard 必须显式启用 |
-| Session/Branch 状态隔离 | 已决 | Ledger 使用 active-branch v2 checkpoint；Snapshot 在 resume/`/tree` 后根据 `recentReads` 重建 |
-| Context 是否持久化 | 已决 | 动态 Snapshot 通过 `context` 临时注入，不写 Session |
+| Session/Branch 状态隔离 | 已决 | Ledger 使用 active-branch v3 checkpoint，并兼容 v1/v2；Snapshot 在 resume/`/tree` 后根据 `recentReads` 重建 |
+| Context 是否持久化 | 已决 | 稳定原则使用 0.87.1 normalized `systemPromptOptions.sections`；动态 Snapshot 通过 `context` 临时注入，不写 Session |
 | 诊断与重置入口 | 已决 | 提供 `/convention-status`、`/convention-snapshot` 和显式确认的 `/convention-reset confirm` |
-| V1 语言和构建系统 | 已决 | V1 支持 Java production source；识别 Maven 与 Gradle 模块边界 |
+| V1.1 语言和构建系统 | 已决 | 支持 Java/Maven/Gradle 与 TypeScript/Vue/pnpm workspace；各语言使用独立 Adapter |
 | 模块识别优先级 | 已决 | 最近构建边界优先；根构建下使用角色 package 前的业务段；最后退化为 source/path |
 | Java 解析策略 | 已决 | 词法清洗 + 有边界结构规则；真实误判证明不足时再升级完整 parser |
 | 首批确定性 Observation | 已决 | 已实现注入、注解、事务、异常、日志、返回包装、映射、null 和依赖形态等信号 |
@@ -345,4 +420,8 @@ V1 不尝试仅靠正则判断复杂业务语义、领域建模优劣或方法�
 | bypass 与项目例外 | 已决 | 精确路径单次 bypass，不跨分支；项目例外使用 `guard.pathExceptions` glob |
 | Post-change 使用 Git diff、watcher 或组合 | 已决 | 使用执行前 Git baseline、dirty fingerprint、执行后状态/HEAD diff；不采用常驻 watcher |
 | 第三方工具映射 | 已决 | 受信配置显式声明 `toolName + operation + pathField`；内置映射不可覆盖 |
-| pi-lens 联调 | 待企业项目 | 未映射诊断工具不进入 Guard；仍需真实同时安装验证无死循环 |
+| pi-lens 联调 | 待更多真实任务 | 未映射诊断工具不进入 Guard；仍需真实同时安装验证无死循环 |
+| Project Profile 生命周期 | 已决 | candidate → validate/fingerprint → semantic diff → 显式批准 → adopt；默认 draft |
+| Pack 权威性 | 已决 | Global Pack 永远 advisory，只由受信 Profile 显式启用 |
+| Profile 加载边界 | 已决 | 一仓库一 Profile；只按 Pi 启动仓库加载，外部仓库 Profile 为 `ignored` |
+| Profile 注入策略 | 已决 | 不注入完整 Profile，只生成目标相关 Knowledge Capsule，并与 Snapshot 共享预算 |

@@ -6,7 +6,7 @@
 
 > 当前状态：功能闭环已经完成，适合本地开发和受控试用；尚未发布稳定版。
 > 当前开发版本：`0.4.0-alpha.1`（未发布）
-> Pi 兼容范围：`>=0.85.1 <0.86.0`
+> Pi 当前验证基线：`0.87.1`（package peer dependency 按 Pi 规范使用 `*`，不代表所有版本均已验证）
 
 ## 1. 它解决什么问题
 
@@ -67,7 +67,7 @@ TypeScript/Vue 包括：
 ## 3. 安装要求
 
 - Node.js `>=22.19.0`
-- Pi `>=0.85.1 <0.86.0`
+- Pi `0.87.1`：当前开发与真实生命周期验证基线；其他版本见兼容矩阵
 - Git：可选；Shell 后置审计需要 Git
 
 插件仓库安装依赖并验证：
@@ -452,7 +452,7 @@ node scripts/evaluate-profile-repository.mjs \
 - Project Profile：已完成首个垂直闭环；
 - Pack catalog：目前只有 Java/Spring 与 TypeScript/Vue 最小 baseline；
 - 未覆盖小程序、移动端、React Native、UniApp、桌面端和其他客户端；
-- 未验证 Pi `0.86.x`；
+- 当前只将 Pi `0.87.1` 列为现行验证基线；`0.85.1` 仅保留历史验证记录，其他版本未进入当前回归矩阵；
 - 不判断业务语义、架构质量或方法拆分是否合理；
 - Profile 目前按 Pi 启动仓库加载，不会为任意外部路径动态切换。
 

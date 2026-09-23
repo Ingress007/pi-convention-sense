@@ -14,9 +14,14 @@ export const STABLE_GUIDANCE = `${STABLE_GUIDANCE_MARKER}
 - Avoid unrelated refactors made only for stylistic consistency.
 - If local evidence is weak or mixed, preserve uncertainty instead of inventing a rule.`;
 
-export function appendStableGuidance(systemPrompt: string): string {
-  if (systemPrompt.includes(STABLE_GUIDANCE_MARKER)) return systemPrompt;
-  return `${systemPrompt}\n\n${STABLE_GUIDANCE}`;
+export const STABLE_GUIDANCE_SECTION = "pi-convention-sense";
+
+export function applyStableGuidanceSection(sections: Record<string, string>): void {
+  const current = sections[STABLE_GUIDANCE_SECTION];
+  if (current?.includes(STABLE_GUIDANCE_MARKER)) return;
+  sections[STABLE_GUIDANCE_SECTION] = current
+    ? `${current}\n\n${STABLE_GUIDANCE}`
+    : STABLE_GUIDANCE;
 }
 
 export interface DynamicContextBuildResult {

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "profileVersion": "0.1.0",
+  "profileVersion": "0.2.0",
   "project": {
     "name": "pi-convention-sense",
     "repositoryRoot": "."
   },
-  "generatedAt": "2026-09-23T02:43:30.379Z",
+  "generatedAt": "2026-09-23T03:42:10.694Z",
   "generatedBy": "agent",
   "review": {
     "status": "draft"
@@ -40,13 +40,13 @@
     {
       "id": "pi-coding-agent",
       "kind": "framework",
-      "version": "0.85.1",
+      "version": "0.87.1",
       "confidence": "high",
       "evidence": [
         {
           "kind": "manifest",
           "path": "package.json",
-          "detail": "Pi 0.85.1 is pinned for development and constrained by the peer dependency range."
+          "detail": "Pi 0.87.1 is pinned for development; the peer dependency is * per Pi package guidance and is not a claim that every Pi version is compatible."
         }
       ]
     },
@@ -483,7 +483,7 @@
       "id": "verification-gate",
       "category": "workflow",
       "title": "Executable verification remains authoritative",
-      "summary": "Source changes are validated with npm run verify, which runs strict TypeScript checking, a clean build, and the Node test suites. Package-facing changes also require npm pack --dry-run; CI repeats verification across Windows and Ubuntu on supported Node 22 versions.",
+      "summary": "Source changes are validated with npm run verify, which runs strict TypeScript checking, a clean build, and the Node test suites against the pinned Pi 0.87.1 development dependency. Package-facing changes also require npm pack --dry-run; CI repeats verification across Windows and Ubuntu on supported Node 22 versions.",
       "strength": "advisory",
       "selector": {
         "paths": [

@@ -35,7 +35,7 @@ import {
 } from "../src/observe/typescript-analyzer.js";
 import { BUILTIN_CONVENTION_PACKS } from "../src/profile/builtin-packs.js";
 import { loadProjectProfile } from "../src/profile/profile-loader.js";
-import { appendStableGuidance, createDynamicContextMessage } from "../src/runtime/context.js";
+import { applyStableGuidanceSection, createDynamicContextMessage } from "../src/runtime/context.js";
 import { loadSpikeConfig, resolveLogPath } from "../src/runtime/config.js";
 import { NdjsonSpikeLogger, type LogMetadata } from "../src/runtime/logger.js";
 import { classifyShellMutationRisk, displayPath, normalizeToolPath } from "../src/runtime/paths.js";
@@ -467,7 +467,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       selectedTools: event.systemPromptOptions.selectedTools ?? [],
     });
     if (!config.enabled) return;
-    return { systemPrompt: appendStableGuidance(event.systemPrompt) };
+    applyStableGuidanceSection(event.systemPromptOptions.sections);
   });
 
   pi.on("agent_start", async (_event, ctx) => log(ctx, "agent_start"));

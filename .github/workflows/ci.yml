@@ -38,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify Pi development baseline
+        run: node -e "const v = require('./node_modules/@earendil-works/pi-coding-agent/package.json').version; if (v !== '0.87.1') throw new Error('Expected Pi 0.87.1, got ' + v); console.log('Pi ' + v)"
+
       - name: Typecheck and test
         run: npm run verify
 

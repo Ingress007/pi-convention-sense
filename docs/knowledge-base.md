@@ -8,11 +8,11 @@
 |---|---|
 | 开发版本 | `0.4.0-alpha.1`，未发布 |
 | Node.js | `>=22.19.0` |
-| Pi | `>=0.85.1 <0.86.0`；真实验证版本 `0.85.1` |
+| Pi | 当前开发与真实生命周期验证基线 `0.87.1`；peer dependency `*` 不代表全版本兼容 |
 | TypeScript | `5.9.3`，strict + NodeNext |
 | 自动测试 | `npm run verify`，56/56 |
 | Project Profile | `.convention-sense/profile.json` |
-| Profile fingerprint | `ab2d68ff7241855c` |
+| Profile fingerprint | `f806157678d37814` |
 | Profile review | `draft`；不得宣称 reviewed |
 | 默认运行模式 | `observe` + fail-open |
 | Guard | experimental opt-in |
@@ -90,7 +90,7 @@ src/observe ──> optional Profile resolution
 
 ### Context 注入
 
-- 稳定原则通过 `before_agent_start` 注入；
+- 稳定原则由 `before_agent_start` 写入 `systemPromptOptions.sections["pi-convention-sense"]`；
 - 动态 Snapshot 与 Knowledge Capsule 使用 custom Context message；
 - 同一 Scope 不重复注入；
 - Profile、Pack、Evidence 或配置 fingerprint 变化会使旧 Snapshot stale。
@@ -185,7 +185,7 @@ Local Evidence（当前 Scope 的真实代码事实）
 
 ### 修改 Extension 生命周期
 
-1. 查阅当前 Pi `0.85.1` Extension API；
+1. 查阅当前 Pi `0.87.1` Extension API；
 2. 覆盖独立 Session、Branch、Context 和 tool result 顺序；
 3. 真实 Pi 验证后再扩大兼容声明；
 4. 提醒用户重启 Pi 才能加载 Extension 代码变化。
