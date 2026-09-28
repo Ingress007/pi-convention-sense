@@ -32,6 +32,10 @@
     "notify": true,
     "maxChangedFiles": 100
   },
+  "practiceReview": {
+    "mode": "suggest",
+    "maxContextTokens": 400
+  },
   "toolMappings": [],
   "logging": {
     "level": "info",

@@ -182,6 +182,7 @@ Observe 是默认模式：
 - 按 repository、module、role 选择候选；
 - 在下一轮 Context 注入 `<local-convention>`；
 - 有 Project Profile 时同时注入有预算限制的 `<project-knowledge>`；
+- `practiceReview.mode="suggest"` 时，对已有 production target 的确定性结构信号注入有界 `<engineering-practice>` 审查问题；
 - 记录潜在 `wouldBlock`，但不阻止 edit/write；
 - Evidence 不足、无 peer、低置信或分析错误时 fail-open。
 
@@ -219,6 +220,31 @@ Guard 不会因为以下情况永久阻断：
 - 新文件没有足够 Evidence。
 
 Guard 是实验性能力，建议只在 disposable worktree 或受控项目中启用。
+
+### Engineering Practice Advisory 与 auto-once
+
+默认 `suggest` 分析已经成功读取并形成 Snapshot 的现有 production target；若 Observe 对同类目标返回 `scope-unknown`，则只执行有界的 Practice-only fallback：
+
+```json
+{
+  "practiceReview": {
+    "mode": "suggest",
+    "maxContextTokens": 400
+  }
+}
+```
+
+- `mode` 支持 `off | suggest | auto-once`，默认 `suggest`；
+- 首批 Signal 覆盖事务与外部副作用、职责维度集中、状态与持久化、fallback/retry/compensation、兼容分支和多分支变化轴；
+- Signal 只产生审查问题，不要求机械注释、强制拆方法或指定设计模式；
+- Practice Capsule 在总 `maxContextTokens` 内使用独立上限，且不会挤掉已注入的 Local Snapshot；
+- fallback 必须是 successful-read ledger 中的 existing production target，最多占用既有 4-target 上限；它不创建 Snapshot、Scope、peer evidence，也不改变 Guard；
+- 简单代码、prospective target、test/generated/vendor/build output、低价值信号和分析错误不会产生 Practice Capsule；
+- 日志只记录 Signal id、计数、reason、预算和耗时，不记录源码、完整问题正文或 diff。
+
+`auto-once` 必须显式启用。它不在普通 Context 重复注入 suggest Capsule，而是在 `agent_before_settle` 只对当前任务成功修改、已读取且命中相关结构 Signal 的 production target 追加一条有界 review message，并请求当前 Agent 继续一次。正常 Snapshot 不可用且原因仅为 `scope-unknown` 时，可使用同一 Practice-only fallback。受控 edit/write 会先把输入归纳为 `relevant | unknown | irrelevant`，不保存正文；marker-free 的简单文字修改不会因为文件其他位置复杂而触发自审。Shell 只复用既有 Git 后置审计确认的 source path。
+
+同一 task generation 即使 review 中继续修改也不会再次触发；Session/Branch 切换会清空 generation。已有其他 continuation、无 mutation、无相关 mutation、无 Signal、分析错误或预算不足都 fail-open。Practice Advisor 不改变 Guard 决策，也不调用第二个 LLM。
 
 ## 8. Project Profile
 
@@ -319,7 +345,7 @@ Profiler 使用当前 Agent，不会引入第二个 LLM；默认生成 `draft`�
 /convention-audit
 ```
 
-- `/convention-status`：查看配置来源、Profile、fingerprint、Packs、read、mutation、Guard、Snapshot 和日志状态；
+- `/convention-status`：查看配置来源、Profile、fingerprint、Packs、Practice mode、read、mutation、Guard、Snapshot 和日志状态；
 - `/convention-reset confirm`：清空当前 Branch 的 read ledger、Snapshot、Guard/bypass 和 post-change 状态，并写入空 checkpoint；保留配置、Profile 和审计日志；
 - `/convention-snapshot`：查看当前 Snapshot；
 - `/convention-bypass <path>`：为精确路径提供一次性 bypass；
@@ -329,6 +355,7 @@ Profiler 使用当前 Agent，不会引入第二个 LLM；默认生成 `draft`�
 
 ```text
 config-source=project
+practice=suggest, practice-tokens=400
 profile=loaded, review=draft, fingerprint=60e259b2419659a4
 packs=java-spring@1.0.0
 ```
@@ -394,7 +421,7 @@ SnailJob 后端和 `snail-job-admin` 已在 Pi `0.87.1` 下完成 Profile、Pack
 - Admin 覆盖 typed API、`Api.*` 类型、表格/抽屉、路由局部搜索和中英文 i18n；
 - 后端 compile、Admin typecheck/build、`git diff --check` 均通过，业务修改按要求保持未提交供人工审查。
 
-SnailAI 后端和 Admin 已完成静态分析及真实 Pi 主流程验收；SnailAI Admin 的原生 typecheck、lint、format、build 因缺少 `node_modules` 暂列 `ENVIRONMENT_BLOCKED`，未安装依赖或修改 lockfile。详见：[SnailJob 报告](docs/evaluations/snail-job-pi-0.87.1-results.md)、[SnailAI 报告](docs/evaluations/snail-ai-pi-0.87.1-results.md)、[发布就绪报告](docs/evaluations/release-readiness-results.md)。
+SnailAI 后端和 Admin 已完成静态分析及真实 Pi 主流程验收；SnailAI Admin 的原生 typecheck、lint、format、build 因缺少 `node_modules` 暂列 `ENVIRONMENT_BLOCKED`，未安装依赖或修改 lockfile。Stage 2 还完成了 24 个 SnailJob/SnailAI Observe/Shadow Guard 任务、真实 TUI bypass、pi-lens 共存和 HEAD 变化 Shell 审计。Engineering Practice 已完成 P1 Advisory、P2 `auto-once` 真实 Pi 生命周期、P3 的 18 次真实任务质量评估，以及 `scope-unknown` provider 正例和简单 wrapper 负例的有界 fallback 验证。详见：[SnailJob 报告](docs/evaluations/snail-job-pi-0.87.1-results.md)、[SnailAI 报告](docs/evaluations/snail-ai-pi-0.87.1-results.md)、[Guard 生产准入报告](docs/evaluations/guard-production-readiness-results.md)、[Practice Advisory MVP](docs/evaluations/practice-advisory-mvp-results.md)、[Practice auto-once](docs/evaluations/practice-auto-once-results.md)、[Practice P3](docs/evaluations/practice-quality-p3-results.md)、[`scope-unknown` fallback](docs/evaluations/practice-scope-unknown-fallback-results.md)和[发布就绪报告](docs/evaluations/release-readiness-results.md)。
 
 ## 17. 常见问题
 
@@ -445,7 +472,7 @@ npm run verify
 npm pack --dry-run
 ```
 
-当前自动测试基线：`npm run verify` **56/56** 通过。
+当前自动测试基线：`npm run verify` **70/70** 通过。
 
 GitHub Actions 在 Windows/Ubuntu、Node `22.19.0`/`22.x` 上运行 `npm run verify`，并单独检查 package 内容。详见：[兼容性与验证矩阵](docs/compatibility.md)。
 
@@ -468,12 +495,13 @@ node scripts/evaluate-profile-repository.mjs \
 ## 18. 当前成熟度与限制
 
 - Observe：适合受控试用；
-- Guard：experimental opt-in；
+- Guard：既定生产准入门槛已通过，继续保持 experimental opt-in、默认 Observe 和 Discovery-only；
+- Engineering Practice：advisory MVP、opt-in `auto-once`、前后两轮架构审查、P3 真实质量评估和 `scope-unknown` 有界 fallback 已完成；默认继续为 `suggest`，`auto-once` 保持 opt-in；
 - Project Profile：已完成首个垂直闭环；
 - Pack catalog：目前只有 Java/Spring 与 TypeScript/Vue 最小 baseline；
 - 未覆盖小程序、移动端、React Native、UniApp、桌面端和其他客户端；
 - 当前只将 Pi `0.87.1` 列为现行验证基线；`0.85.1` 仅保留历史验证记录，其他版本未进入当前回归矩阵；
-- 不判断业务语义、架构质量或方法拆分是否合理；
+- Practice Advisor 只提出结构信号支持的审查问题，不断言业务语义、注释必要性、架构优劣或方法必须拆分，也不会把这些主观判断加入 Guard；
 - Profile 目前按 Pi 启动仓库加载，不会为任意外部路径动态切换。
 
 ## 19. 文档索引
@@ -486,10 +514,18 @@ node scripts/evaluate-profile-repository.mjs \
 - [产品需求](docs/requirements.md)
 - [技术设计](docs/design.md)
 - [Project Intelligence](docs/project-intelligence.md)
+- [Engineering Practice 设计与任务顺序](docs/engineering-practice.md)
+- [Practice Advisory MVP 验证](docs/evaluations/practice-advisory-mvp-results.md)
+- [Practice auto-once 验证](docs/evaluations/practice-auto-once-results.md)
+- [P1 整体架构必要性审查](docs/evaluations/architecture-necessity-review.md)
+- [auto-once 后置整体架构复审](docs/evaluations/auto-once-architecture-review.md)
+- [Practice P3 真实质量评估](docs/evaluations/practice-quality-p3-results.md)
+- [`scope-unknown` Practice fallback 评估](docs/evaluations/practice-scope-unknown-fallback-results.md)
 - [Pack/Adapter 贡献与测试规范](docs/contributing-adapters-and-packs.md)
 - [Stage 0 Spike](docs/stage-0-spike.md)
 - [Stage 1 Observe](docs/stage-1-observe.md)
 - [Stage 2 Guard](docs/stage-2-guard.md)
+- [Guard 生产准入结果](docs/evaluations/guard-production-readiness-results.md)
 - [Web 技术栈覆盖调研](docs/research/web-technology-stack-coverage.md)
 - [SnailJob 全栈验证](docs/evaluations/snail-job-fullstack-results.md)
 - [SnailJob Pi 0.87.1 验收](docs/evaluations/snail-job-pi-0.87.1-results.md)

@@ -42,6 +42,10 @@ export function createDefaultConfig(configDirName = ".pi"): SpikeConfig {
       notify: true,
       maxChangedFiles: 100,
     },
+    practiceReview: {
+      mode: "suggest",
+      maxContextTokens: 400,
+    },
     toolMappings: [],
     logging: {
       level: "info",
@@ -102,6 +106,18 @@ function readMode(source: Record<string, unknown>, fallback: SpikeMode, diagnost
   if (value === undefined) return fallback;
   if (value === "observe" || value === "guard") return value;
   diagnostics.push("Ignoring invalid mode; expected observe or guard");
+  return fallback;
+}
+
+function readPracticeMode(
+  source: Record<string, unknown>,
+  fallback: SpikeConfig["practiceReview"]["mode"],
+  diagnostics: string[],
+): SpikeConfig["practiceReview"]["mode"] {
+  const value = source.mode;
+  if (value === undefined) return fallback;
+  if (value === "off" || value === "suggest" || value === "auto-once") return value;
+  diagnostics.push("Ignoring invalid practiceReview.mode; expected off, suggest, or auto-once");
   return fallback;
 }
 
@@ -334,6 +350,20 @@ export function loadSpikeConfig(
           defaults.postChangeAudit.maxChangedFiles,
           1,
           1000,
+          diagnostics,
+        ),
+      };
+    })(),
+    practiceReview: (() => {
+      const practice = readNestedObject(parsed, "practiceReview", diagnostics);
+      return {
+        mode: readPracticeMode(practice, defaults.practiceReview.mode, diagnostics),
+        maxContextTokens: readInteger(
+          practice,
+          "maxContextTokens",
+          defaults.practiceReview.maxContextTokens,
+          120,
+          1200,
           diagnostics,
         ),
       };

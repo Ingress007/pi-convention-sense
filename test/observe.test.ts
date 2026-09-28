@@ -76,6 +76,14 @@ test("request and response package paths override a generic VO suffix", () => {
     detectJavaRole("/repo/src/main/java/com/acme/support/request/ReportHttpRequestHandler.java").role,
     "unknown",
   );
+  assert.equal(
+    detectJavaRole("/repo/src/main/java/com/acme/admin/vo/memory/AddMemoryRequestVO.java").role,
+    "request-dto",
+  );
+  assert.equal(
+    detectJavaRole("/repo/src/main/java/com/acme/admin/vo/memory/MemoryItemResponseVO.java").role,
+    "response-dto",
+  );
 });
 
 test("TypeScript and Vue roles distinguish pages, components, hooks, services, clients, stores, routers, layouts, and workspace packages", () => {
@@ -99,6 +107,46 @@ test("TypeScript and Vue roles distinguish pages, components, hooks, services, c
   for (const [relativePath, expectedRole] of cases) {
     assert.equal(detectTypeScriptRole(join(root, ...relativePath.split("/"))).role, expectedRole);
   }
+});
+
+test("Vue component ranking prefers the same semantic filename suffix", () => {
+  const root = mkdtempSync(join(tmpdir(), "convention-vue-semantic-name-"));
+  writeFileSync(join(root, "package.json"), '{"name":"semantic-name-fixture"}\n');
+  const component = '<script setup lang="ts">defineOptions({ name: "Fixture" });</script>\n<template><div /></template>\n';
+  const paths = [
+    "src/views/workflow/batch/modules/workflow-batch-search.vue",
+    "src/views/job/batch/modules/job-batch-search.vue",
+    "src/views/job/task/modules/job-task-search.vue",
+    "src/views/retry/task/modules/retry-task-search.vue",
+    "src/views/namespace/modules/namespace-search.vue",
+    "src/components/workflow/modules/drawer/callback-drawer.vue",
+    "src/components/workflow/modules/drawer/branch-drawer.vue",
+    "src/components/workflow/modules/drawer/task-drawer.vue",
+    "src/components/workflow/modules/common/detail-card.vue",
+  ];
+  for (const relativePath of paths) {
+    const path = join(root, ...relativePath.split("/"));
+    mkdirSync(resolve(path, ".."), { recursive: true });
+    writeFileSync(path, component);
+  }
+
+  const config = createDefaultConfig();
+  config.includeLanguages = ["typescript", "vue"];
+  const result = new ObserveAnalyzer().analyzeTarget(
+    join(root, ...paths[0]!.split("/")),
+    root,
+    config,
+  );
+
+  assert.ok(result.snapshot);
+  assert.equal(result.snapshot.status, "valid");
+  assert.equal(result.snapshot.candidates.length, 4);
+  assert.ok(
+    result.snapshot.candidates.every((candidate) =>
+      candidate.path.replaceAll("\\", "/").endsWith("-search.vue"),
+    ),
+  );
+  assert.ok(result.snapshot.candidates.every((candidate) => candidate.breakdown.nameSimilarity === 20));
 });
 
 test("Vue page analysis never mixes components or layouts into page Evidence", () => {
@@ -274,6 +322,46 @@ test("coexisting additive return wrappers are not mislabeled as mixed alternativ
   assert.equal(wrappers.length, 2);
   assert.ok(wrappers.every((item) => item.confidence === "high"));
   assert.ok(wrappers.every((item) => item.status === "dominant"));
+});
+
+test("Java service interfaces do not borrow implementation-only peers", () => {
+  const root = mkdtempSync(join(tmpdir(), "convention-java-interface-peers-"));
+  writeFileSync(join(root, "pom.xml"), "<project><modelVersion>4.0.0</modelVersion></project>\n");
+  const packageRoot = join(root, "src", "main", "java", "com", "acme", "service");
+  mkdirSync(join(packageRoot, "pipeline"), { recursive: true });
+  const sources = new Map([
+    ["RerankService.java", "package com.acme.service; public interface RerankService { void rerank(); }\n"],
+    ["SearchService.java", "package com.acme.service; public interface SearchService { void search(); }\n"],
+    ["ChunkService.java", "package com.acme.service; public interface ChunkService { void chunk(); }\n"],
+    [
+      "pipeline/DocumentService.java",
+      "package com.acme.service.pipeline; @Service @RequiredArgsConstructor public class DocumentService { private final SearchService searchService; }\n",
+    ],
+  ]);
+  for (const [relativePath, source] of sources) {
+    writeFileSync(join(packageRoot, ...relativePath.split("/")), source);
+  }
+
+  const result = new ObserveAnalyzer().analyzeTarget(
+    join(packageRoot, "RerankService.java"),
+    root,
+    createDefaultConfig(),
+  );
+
+  assert.ok(result.snapshot);
+  assert.equal(result.snapshot.status, "weak");
+  assert.equal(result.snapshot.candidates.length, 2);
+  assert.ok(
+    result.snapshot.candidates.every(
+      (candidate) => (candidate.facts as JavaFileFacts).declarationKind === "interface",
+    ),
+  );
+  assert.ok(result.snapshot.candidates.every((candidate) => !candidate.path.includes("DocumentService")));
+  assert.ok(
+    result.snapshot.observations.every(
+      (observation) => !["dependency-injection", "logging-framework"].includes(observation.category),
+    ),
+  );
 });
 
 test("Maven multi-module analysis produces ranked peers and repeated evidence", () => {

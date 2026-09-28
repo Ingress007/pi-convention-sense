@@ -1,4 +1,4 @@
-import { dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 import type { LoadedProjectProfile } from "../profile/profile-loader.js";
 import { applyProjectProfileToScope, effectiveScopeRole } from "../profile/profiled-scope.js";
 import type { ConventionPack } from "../profile/types.js";
@@ -27,6 +27,21 @@ function jaccard(left: readonly string[], right: readonly string[]): number {
   return intersection / (a.size + b.size - intersection);
 }
 
+function semanticFileSuffix(path: string): string | undefined {
+  const name = basename(path, extname(path))
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase();
+  const suffix = name.split(/[^a-z0-9]+/).filter(Boolean).at(-1);
+  return suffix && !["index", "main", "shared", "type", "types", "utils"].includes(suffix)
+    ? suffix
+    : undefined;
+}
+
+function sameSemanticFileSuffix(left: string, right: string): boolean {
+  const leftSuffix = semanticFileSuffix(left);
+  return leftSuffix !== undefined && leftSuffix === semanticFileSuffix(right);
+}
+
 function determineLevel(
   targetPath: string,
   targetScope: ConventionScope,
@@ -41,6 +56,7 @@ function determineLevel(
 
 function preliminaryScore(path: string, targetPath: string, targetScope: ConventionScope): number {
   let score = 30;
+  if (sameSemanticFileSuffix(path, targetPath)) score += 50;
   if (dirname(path) === dirname(targetPath)) score += 40;
   const rel = relative(targetScope.root, path);
   if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..")) score += 30;
@@ -60,6 +76,7 @@ function scoreCandidate(
   const sameDirectory = dirname(target.path) === dirname(candidate.path) ? 15 : 0;
   const primitiveSimilarity = 10 * jaccard(target.frameworkPrimitives, candidate.frameworkPrimitives);
   const exportSimilarity = 8 * jaccard(target.exportNames, candidate.exportNames);
+  const nameSimilarity = sameSemanticFileSuffix(target.path, candidate.path) ? 20 : 0;
   const importJaccard = 7 * jaccard(target.imports, candidate.imports);
   const recentlyMaintained = 3 / (1 + Math.abs(target.mtimeMs - candidate.mtimeMs) / YEAR_MS);
   const sizeSimilarity = target.size === 0 && candidate.size === 0
@@ -73,6 +90,7 @@ function scoreCandidate(
     samePackageOrSibling: sameDirectory,
     annotationSimilarity: primitiveSimilarity,
     interfaceOrSuperclassSimilarity: exportSimilarity,
+    nameSimilarity,
     importJaccard,
     recentlyMaintained,
     sizeSimilarity,

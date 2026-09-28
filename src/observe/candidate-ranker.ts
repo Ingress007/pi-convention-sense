@@ -74,6 +74,7 @@ function scoreCandidate(
     samePackageOrSibling: samePackage,
     annotationSimilarity,
     interfaceOrSuperclassSimilarity: inheritanceSimilarity,
+    nameSimilarity: 0,
     importJaccard,
     recentlyMaintained,
     sizeSimilarity,
@@ -119,6 +120,12 @@ export function rankJavaCandidates(options: {
     try {
       const facts = analyzeJavaFile(preliminary.path);
       if (facts.generated || facts.role !== options.targetFacts.role) continue;
+      if (
+        options.targetFacts.role === "service-interface" &&
+        options.targetFacts.declarationKind &&
+        facts.declarationKind &&
+        facts.declarationKind !== options.targetFacts.declarationKind
+      ) continue;
       const baseScope = detectConventionScope(preliminary.path, options.repositoryRoot, facts);
       const scope = applyProjectProfileToScope(
         baseScope,

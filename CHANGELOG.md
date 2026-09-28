@@ -8,14 +8,29 @@
 
 - 将产品需求与技术设计同步到三层 Project Intelligence、Project Profile、Knowledge Capsule 和 TypeScript/Vue Adapter 的现行架构；
 - 将 Pi 当前开发基线从 `0.85.1` 升级到 `0.87.1`；按 Pi package 官方规范把 peer dependency 改为 `"*"`，同时仅声明已验证版本；
-- 稳定指导改用 0.87.1 normalized `systemPromptOptions.sections`，避免替换完整 system prompt。
+- 稳定指导改用 0.87.1 normalized `systemPromptOptions.sections`，避免替换完整 system prompt；
+- 新增 Engineering Practice 设计提案，并明确先完成 Guard 生产准入收尾；
+- `/convention-snapshot` 无可用 Snapshot 时改为语言无关提示；
+- Analyzer 升级为 `multi-lexical-v6-semantic-peers`：Java service interface 按 declaration kind 隔离，TypeScript/Vue 候选加入文件语义后缀排序，并修复 `*RequestVO`/`*ResponseVO` 分类；
+- 完成 Stage 2 Guard 生产准入：24 个 SnailJob/SnailAI 任务、pi-lens `4.2.1` 共存、真实 TUI bypass/Session/Branch/reset 和 HEAD 变化 Shell 审计全部通过，Guard 继续保持 experimental opt-in；
+- 实现 Engineering Practice Advisory MVP：`practice-lexical-v1` 确定性 Signal、有界 `<engineering-practice>` Capsule、`off | suggest` 配置、Context 共享预算、隐私日志和 fail-open 边界；不增加 Guard 阻断或第二个 LLM；
+- 完成整体架构必要性审查并删除无调用方的 Practice result/reason/details 字段；确认 P1 不需要独立 Resolver、缓存、parser 或 Profile schema；
+- 实现 opt-in `auto-once`：task-local Review Runtime、mutation relevance、Pi `agent_before_settle` custom message、当前 Agent 至多 continuation 一次，以及 Session/Branch/reset 防循环边界；
+- 完成 auto-once 后置整体架构复审：修正 Pi boundary `canContinue` 预判、简单修改误触发、auto/suggest 重复分析，并把 boundary planner 提取为独立纯函数；
+- 完成 Practice P3 真实质量评估：SnailJob/SnailAI 6 个任务 × 3 种模式共 18 次 Pi run，18/18 正确、简单任务干扰 0/2；默认保持 `suggest`，`auto-once` 继续 opt-in，不扩 Profile schema 或 parser；
+- 实现 `scope-unknown` 有界 Practice-only fallback：仅分析 successful-read ledger 中的 existing production target，不创建 Snapshot/peer evidence、不改变 Guard；真实 provider 恢复 `variation-axis` Signal，简单 API wrapper 仍为 0 Signal。
 
 ### 验证
 
-- Pi `0.87.1` 下 strict TypeScript、clean build 与 56 个自动测试全部通过；
+- Pi `0.87.1` 下 strict TypeScript、clean build 与 70 个自动测试全部通过；
 - 独立无 Session Pi `0.87.1` 子进程验证 Extension 加载、named prompt section、custom Context、Profile 加载及 settle/shutdown 生命周期；SnailJob/SnailAI 真实项目主流程验收通过。
 - SnailJob Job Tag Management CRUD v2 完成真实业务开发验收：后端 compile、Admin typecheck/build、六种数据库方言、namespace 隔离和前端 typed API 均通过；业务修改按要求保持未提交。
-- SnailAI Admin 原生检查因缺少 `node_modules` 记录为 `ENVIRONMENT_BLOCKED`，未安装依赖或修改 lockfile。
+- SnailAI Admin 原生检查因缺少 `node_modules` 记录为 `ENVIRONMENT_BLOCKED`，未安装依赖或修改 lockfile；
+- Guard 准入指标：Top-K 72/77（93.5%）、High Observation 17/17（100%）、潜在误拦截 1/24（4.2%），24/24 Discovery 后放行；
+- Practice P1 SnailJob 只读 smoke：1,158 个 production Java 文件中 43 个触发 Signal（3.7%），真实 `RetryWebServiceImpl` Capsule 为 335 tokens 且不含源码正文；
+- Practice P2 真实 Pi `0.87.1`：marker-free edit 为 1 次 Agent run、0 review；相关外部副作用 edit 为 2 次 Agent run、1 个 373-token review，第二次 boundary 以 `already-requested` 结束；
+- Practice P3：suggest question 人工适用 5/7、auto-once 4/4；3 次 auto review 中 1 次补充有效兼容分支移除条件、2 次确认无需修改，未观察到行为修复；
+- `scope-unknown` fallback 评估：SnailAI provider 从 0/1 提升到 1/1 Signal 覆盖，suggest Capsule 186 tokens、auto-once review 273 tokens；简单 API wrapper 0 Signal、0 continuation。
 
 ## [0.4.0-alpha.1] - 2026-09-23
 

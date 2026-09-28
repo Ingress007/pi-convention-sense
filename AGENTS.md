@@ -18,7 +18,7 @@
 - Pi 当前开发与真实生命周期验证基线为 `0.87.1`；package peer dependency 按 Pi 规范使用 `*`，不得据此宣称其他版本已验证；
 - TypeScript `5.9.3`，strict + NodeNext；
 - 开发版本 `0.4.0-alpha.1`，尚未发布；
-- 完整测试基线 `npm run verify`，56/56。
+- 完整测试基线 `npm run verify`，70/70。
 
 不要擅自扩大兼容范围或把未验证环境写成“已支持”。
 
@@ -44,6 +44,7 @@ Local Evidence 是局部事实，不是自动生成长期规则的依据。不�
 - `src/runtime/`：配置、状态、checkpoint、Context、日志和状态展示；
 - `src/observe/`：repository、Scope、候选、Evidence 和 Snapshot；
 - `src/guard/`：Discovery Guard、工具映射和 Git 后置审计；
+- `src/practice/`：Practice Signal、Capsule formatter 和 one-shot Review Runtime；
 - `src/profile/`：Profile、Pack、selector、resolver 和 Knowledge Capsule；
 - `skills/project-profiler/`：显式 Project Profile authoring 工作流；
 - `scripts/`：可复用真实仓库评估工具；
@@ -62,6 +63,14 @@ Local Evidence 是局部事实，不是自动生成长期规则的依据。不�
 - Guard 不得因风格差异直接阻断修改；
 - unsupported、excluded、low confidence、weak/mixed、analysis error 和 no-peer 必须 fail-open；
 - bypass 必须精确路径、单次消费、不跨 Session/Branch。
+
+### Engineering Practice
+
+- 默认 `suggest`；`auto-once` 必须显式启用，并继续保持每 task generation 最多一次；
+- `scope-unknown` fallback 仅面向 successful-read ledger 中的 existing production target；
+- fallback 不得创建或伪造 Scope、Snapshot、candidate、peer evidence，也不得改变 Guard reason code、bypass、counter 或 checkpoint；
+- 无 Signal、未读、prospective、non-production、excluded、超大文件和分析错误必须 fail-open；
+- 不因 Practice 引入 Profile `practices` schema、完整 parser、method-level diff、测试映射器、平行 Git runtime 或第二个 LLM，除非新的真实证据和明确产品决策支持。
 
 ### Repository 与 Profile
 

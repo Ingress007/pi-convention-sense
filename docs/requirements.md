@@ -1,12 +1,13 @@
 # pi-convention-sense 产品需求文档（PRD）
 
 > 文档状态：方案草案（Draft）
-> 版本：V1.1
+> 版本：V1.2 Draft
 > 源文档标注更新日期：2026-09-17
 > 当前架构融合日期：2026-09-23
 > 适用对象：项目负责人、Pi Extension 开发者、企业 Web 前后端开发者
 > 原始资料：用户提供的 Notion 文档
 > Project Intelligence 深入设计：[project-intelligence.md](./project-intelligence.md)
+> Engineering Practice 设计与验证：[engineering-practice.md](./engineering-practice.md)
 
 ## 1. 产品定义
 
@@ -29,6 +30,8 @@ pi-convention-sense 是运行在 Pi Agent 中的“局部代码惯例感知层�
 
 一次 Local Evidence 不会自动写回 Project Profile。完整 Profile 不直接注入模型，只为当前目标解析有预算的 Knowledge Capsule。
 
+V1.2 已实现与 Local Convention 正交的 Engineering Practice：确定性目标结构 Signal 和有界 Capsule 支持默认 `suggest`，opt-in `auto-once` 使用任务内 mutation relevance 与 `agent_before_settle` 让当前 Agent 至多自审一次；`scope-unknown` 时只对 successful-read existing production target 执行有界 Practice-only fallback。method-level diff 和测试关联仍待质量证据；Practice 不改变 Guard 只约束 Discovery 的边界。
+
 ## 2. 背景与问题
 
 ### 2.1 使用背景
@@ -49,6 +52,7 @@ pi-convention-sense 是运行在 Pi Agent 中的“局部代码惯例感知层�
 4. **全面规则维护成本过高**：人工维护的细粒度规范容易过期。
 5. **现有能力缺少运行时串联**：`AGENTS.md`、pi-lens、pi-conventions 各自解决部分问题，但缺少局部惯例感知层。
 6. **Shell/第三方工具可绕过 edit/write**：只依赖修改前拦截无法覆盖所有变更。
+7. **项目一致性不等于工程质量**：照着遗留代码写可以保持风格，却不能自动判断何处需要 why-comment、职责拆分、失败边界、测试或适当设计模式。
 
 ### 2.3 产品机会
 
@@ -57,6 +61,8 @@ pi-convention-sense 是运行在 Pi Agent 中的“局部代码惯例感知层�
 - 当前正在修改什么语言、模块和代码角色？
 - 当前区域内哪些同类实现最值得参考？
 - 哪些模式被多个相关文件重复证明，哪些只是偶然或混杂？
+- 当前任务有哪些非显然约束、状态变化、事务、副作用或失败路径值得工程审查？
+- 注释、拆分和抽象是否由真实意图与变化轴支持，而不是机械增加？
 
 ## 3. 产品目标
 
@@ -71,6 +77,8 @@ pi-convention-sense 是运行在 Pi Agent 中的“局部代码惯例感知层�
 - **G9 项目知识可审核**：Project Profile 通过 candidate、validate、diff、显式批准和 adopt 建立，不静默覆盖。
 - **G10 技术栈可组合**：语言、框架、架构、持久化、Transport 和 Build/Test 能力通过 Adapter 与 advisory Pack 组合。
 - **G11 仓库信任隔离**：候选只来自目标 Git repository；Profile trust 只属于 Pi 启动仓库，不隐式扩展到外部路径。
+- **G12 工程实践贯穿**：在不调用第二个 LLM 的前提下，以有界 Practice Signal、Practice Capsule 和当前 Agent 自审覆盖任务理解、实现规划、编码与验证。
+- **G13 防止机械优化**：不以注释数量、方法行数或模式使用数量代表质量；工程建议必须有任务风险、结构信号或 reviewed 项目原则支撑。
 
 ## 4. 非目标
 
@@ -84,7 +92,8 @@ V1 明确不做：
 - 正常编码链路使用第二个 LLM、Subagent 或外部模型服务；
 - 覆盖所有语言的完整 AST；
 - 提供复杂 UI；
-- 泛化评审设计优劣或架构先进性；
+- 把主观的设计优劣、注释数量、方法长度或“是否使用设计模式”直接升级为 Convention Guard 阻断；
+- 为了满足通用最佳实践而机械补注释、过度拆分或引入没有真实变化轴的设计模式；
 - 保证拦截所有 Shell/第三方工具产生的文件变更；
 - 将局部惯例置于显式需求、硬约束、编译器、测试或安全规则之上。
 
@@ -137,6 +146,10 @@ Agent 读取 Vue route page、route-local component、hook、API service、reque
 
 Pi 从仓库 A 启动却读取仓库 B 的绝对路径时，候选仍严格限制在 B 的 Git repository；A 的 Profile 不应用到 B，B 的 Profile 即使存在也标记为 `ignored`。用户必须从 B 根目录显式批准并启动新的 Pi 才能加载 B 的 Profile。
 
+### 6.10 复杂业务修改的工程实践
+
+Agent 修改包含状态转换、事务、外部副作用或兼容分支的业务流程。系统除提供 Local Snapshot 外，还根据可解释结构信号生成有预算的 Practice Capsule，提醒 Agent 判断 why-comment、职责边界、失败路径、真实变化轴和测试。修改完成后只在存在高价值信号时由当前 Agent 至多自审一次；简单改动不增加无意义流程。
+
 ## 7. 功能需求
 
 | 编号 | 优先级 | 需求 | 验收要点 |
@@ -161,6 +174,12 @@ Pi 从仓库 A 启动却读取仓库 B 的绝对路径时，候选仍严格限�
 | FR-18 | P0 | 支持 TypeScript/Vue Adapter | 覆盖 page、component、hook、API、request、store、router、layout 和 workspace package |
 | FR-19 | P0 | 强制 repository/Profile trust 隔离 | 不跨仓库取 peer，不从当前会话隐式加载外部仓库 Profile |
 | FR-20 | P1 | 提供 Profile/Pack 状态诊断 | `/convention-status` 展示 config source、Profile status/review/fingerprint、active Packs 和 diagnostics |
+| FR-21 | P1（已实现） | 构建可解释 Practice Signal | 从现有 production target 提取职责、状态/持久化、事务/副作用、兼容/fallback 和变化轴信号；auto-once 另用不保存正文的 mutation relevance 防止简单编辑借用无关 Signal |
+| FR-22 | P1（已实现） | 注入 Practice Capsule | 优先选择已注入 Snapshot 对应目标；`scope-unknown` fallback 只允许 successful-read existing production target；与 Knowledge Capsule/Snapshot 共享预算，不输出强制模式结论 |
+| FR-23 | P2（已实现） | 支持当前 Agent 一次性自审 | opt-in 使用 `agent_before_settle`，每个任务至多继续一次，不调用第二个 LLM；无 mutation/相关性/Signal 时 fail-open |
+| FR-24 | P1（MVP 已实现） | 支持审核后的项目工程原则 | 复用 Profile knowledge/convention；draft 与 Global Pack 继续 advisory，不从 Local Evidence 自动提升，暂不扩 schema |
+| FR-25 | P1（已实现） | 保持 Practice 与 Guard 分离 | 缺注释、复杂方法或未使用模式不得成为 Convention Guard reason code；可执行硬规则交给 lint/pi-lens/独立 policy |
+| FR-26 | P1（已实现） | 有界恢复 `scope-unknown` Practice 覆盖 | 不创建 Snapshot/peer evidence，不影响 Guard；只分析 successful-read existing production target，no Signal 时 fail-open |
 
 ## 8. Scope 与候选要求
 
@@ -283,6 +302,14 @@ V1 不尝试仅靠正则判断复杂业务语义、领域建模优劣或方法�
 - 只对“缺少发现流程”做 Guard，不因 Low Confidence 的风格差异硬阻止；
 - 新文件或无 peer 场景不得陷入永久阻塞。
 
+### 10.4 Engineering Practice 与 Guard 分离
+
+- Convention Guard 继续只阻断可补救的 Discovery 缺口；
+- Practice Signal 只表示“值得审查”，不直接断言必须加注释、拆方法或使用某个模式；
+- “公共 API 必须有文档”等客观政策应由 lint、pi-lens、Checkstyle/ESLint 或独立 Hard Policy 执行；
+- 当前 Agent 的语义自审必须有次数、Context 和 Branch 边界，默认不启用自动继续；
+- Engineering Practice 详细设计见 [engineering-practice.md](./engineering-practice.md)。
+
 ## 11. 决策优先级
 
 系统应按以下顺序处理冲突：
@@ -302,15 +329,15 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 ## 12. 非功能需求
 
 - **性能**：首次 Scope 发现的额外本地分析目标为亚秒到低秒级；不得每轮扫描全仓库。
-- **Token**：单个 Snapshot 默认不超过 1200 tokens，仅包含必要证据和路径引用。
-- **可靠性**：分析失败不破坏 Pi 主流程；Observe 降级为日志；Guard 返回可操作说明。
+- **Token**：单个 Snapshot 默认不超过 1200 tokens；Practice Capsule 与 Knowledge Capsule、Snapshot 共享总预算，并有独立上限。
+- **可靠性**：分析失败不破坏 Pi 主流程；Observe 降级为日志；Guard 返回可操作说明；Practice 分析失败不得触发自动自审或阻断。
 - **隐私**：正常运行不向独立模型或外部服务发送源码；日志不记录源码、edit/write 正文、完整 prompt 或完整 Shell 命令。
 - **信任隔离**：Profile 只从受信启动仓库加载；外部仓库路径不会隐式扩大信任。
 - **可解释性**：Observation 可回溯到 Evidence；Profile knowledge/convention 可回溯到 manifest、config、source、documentation 或 user-review。
 - **可配置性**：支持仓库级启停、模式、排除路径、候选数和阈值配置。
 - **兼容性**：不侵入 Pi Core，只使用公开 Extension API。
-- **可测试性**：Scope、Ranker、Evidence、Cache、Formatter、Guard 可独立测试。
-- **可观测性**：Observe 输出 Scope、候选排名、Snapshot 生成/失效和 Guard 决策。
+- **可测试性**：Scope、Ranker、Evidence、Cache、Formatter、Guard、Practice Signal/Capsule/Review Runtime 均可独立测试。
+- **可观测性**：Observe 输出 Scope、候选排名、Snapshot 生成/失效和 Guard 决策；Practice 只记录 Signal id、计数、reason code、预算和耗时。
 
 ## 13. 异常与降级要求
 
@@ -344,13 +371,16 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 
 ### 14.2 Guard 版本附加标准
 
-> 当前未勾选项是有意保留的未完成准入门槛，不代表实现缺失：真实 TUI 手动命令、HEAD 变化 Shell 场景、20～30 个企业任务和 pi-lens 同时安装联调仍未完成。Guard 因此继续保持 experimental opt-in。
+> Stage 2 既定准入门槛已完成并通过。Guard 继续保持 experimental opt-in 与默认 Observe；准入通过不改变 Discovery-only 和 fail-open 边界。永久证据见[Guard 生产准入结果](evaluations/guard-production-readiness-results.md)。
 
 - [x] edit/write 缺少有效 Evidence 时能稳定 block（Fixture 与真实 Pi 合成流程）；
 - [x] 返回的信息足以让 Agent 下一轮自行补救；
 - [x] 新文件和无同类实现项目不会永久阻塞；
 - [x] 支持项目级禁用和明确 bypass；
-- [ ] 与并行 Tool Call、pi-lens 组合时无死循环（并行 Tool Call 已验证；同时安装 pi-lens 的真实任务联调未完成）。
+- [x] 与并行 Tool Call、pi-lens `4.2.1` 组合时无重复阻断或死循环；
+- [x] 真实 TUI bypass 满足精确路径、一次消费、Session/Branch/reset 隔离；
+- [x] HEAD 变化 Shell 审计能隔离既有 dirty 文件并在下一轮注入缺口；
+- [x] 24 个 SnailJob/SnailAI Observe/Shadow Guard 任务达到 80% / 90% / 10% 准入门槛。
 
 ### 14.3 Project Intelligence 附加标准
 
@@ -364,6 +394,19 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 - [x] Profiler helper 支持 validate、fingerprint 和 semantic diff；
 - [x] SnailJob 后端与前端完成 Profile + Pack + Local Evidence 全栈验证。
 
+### 14.4 Engineering Practice 附加标准（Advisory MVP 已实现）
+
+- [x] Practice Signal 可解释、可测试，弱信号和分析错误 fail-open；
+- [x] Practice Capsule 优先包含已注入 Snapshot 对应目标；`scope-unknown` fallback 仅接受已成功读取的 existing production target，并遵守总预算和独立上限；
+- [x] 注释建议强调非显然意图，不鼓励逐行翻译代码；
+- [x] 拆分和设计模式问题必须由责任维度或真实多分支变化轴支撑，并明确优先简单方案；
+- [x] `agent_before_settle` 自审最多继续一次，不形成循环；
+- [x] Session/Branch、repository、pi-lens 和日志隐私边界保持不变；
+- [x] 简单任务、prospective target 和非 production path 不注入 Practice Capsule；
+- [x] opt-in `auto-once` 完成自动与真实 Pi 生命周期验证；
+- [x] 真实任务人工质量评估已完成；证据支持默认保持 suggest、auto-once opt-in，且不扩 method-level diff 或 Profile schema；
+- [x] `scope-unknown` fallback 完成真实 provider 正例、简单 API wrapper 负例、预算和 one-shot 生命周期验证。
+
 ## 15. 评估指标
 
 | 指标 | V1 建议目标 |
@@ -374,6 +417,13 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 | 平均 Snapshot Token | ≤ 1200 |
 | 首次分析交互延迟 | 可接受，且不触发每轮全量扫描 |
 | Branch 串用 Snapshot | 0 |
+| Practice 建议人工认可率 | P3 基线：suggest 5/7，auto-once 4/4 |
+| 无意义注释增加率 | P3 基线：0/18 |
+| 过度拆分/过度设计率 | P3 基线：0/18 |
+| 简单任务 Practice 干扰率 | P3 基线：额外 continuation 0/2 |
+| 自动自审次数 | 每个任务最多 1 次 |
+
+Stage 2 最新实测：Top-K 72/77（93.5%）、High Observation 17/17（100%）、潜在误拦截 1/24（4.2%）、最大 Snapshot 347 tokens；详见[永久准入报告](evaluations/guard-production-readiness-results.md)。Practice P3 的 18 个 mode run 为 18/18 正确，auto-once 3 次 review 中 1 次改进说明清晰度、0 次行为修复；`scope-unknown` provider fallback 将目标 Signal 覆盖从 0/1 提升到 1/1，简单 wrapper 0 continuation；详见[质量报告](evaluations/practice-quality-p3-results.md)与[fallback 报告](evaluations/practice-scope-unknown-fallback-results.md)。
 
 ## 16. 发布范围与优先级
 
@@ -381,7 +431,8 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 2. **阶段 1：V1 Observe**：Java Scope、候选排序、确定性 Evidence、Context 注入、Ledger、Cache 和指标。
 3. **阶段 2：V1 Guard**：edit/write Guard、补救提示、bypass、fail-open、pi-lens 联调和 Shell 后置检查。
 4. **阶段 3：V1.1 Project Intelligence**：v3 checkpoint、Profile/Pack/effective role、Knowledge Capsule、Profiler Skill、TypeScript/Vue Adapter 和全栈验证。
-5. **阶段 4：产品化与扩展**：新 Pi 版本兼容矩阵、更多真实仓库、更多 Adapter/Pack、CI/发布自动化和 Guard 准入评估。
+5. **阶段 4：Engineering Practice**：Practice Signal、Practice Capsule、审核后的工程原则、当前 Agent 一次性自审和真实质量评估；详细方案见 [engineering-practice.md](./engineering-practice.md)。
+6. **阶段 5：产品化与扩展**：新 Pi 版本兼容矩阵、更多真实仓库、更多 Adapter/Pack、CI/发布自动化。Stage 2 Guard、Stage 4 Engineering Practice P1–P3 与 `scope-unknown` fallback 均已完成当前门槛。
 
 ## 17. 主要风险
 
@@ -396,6 +447,9 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 | Session/Branch 污染 | 注入错误证据 | Branch checkpoint、失效重建、不跨 Branch 复用动态授权 |
 | Profile 信任扩大 | 外部仓库知识进入当前会话 | Profile 只按受信启动仓库加载；外部状态为 `ignored` |
 | Profile/Pack 过度权威 | 通用规则覆盖真实项目 | draft hard 与 Global Pack hard 降级，Guard 不因风格差异阻断 |
+| 把遗留惯例误当优秀实践 | 延续长方法、缺注释或高耦合 | Local Evidence 与 Practice Signal 分层，工程原则需要审核来源 |
+| 机械补注释或过度设计 | 噪声、抽象膨胀、改动扩大 | why-comment、真实变化轴、简单方案优先和无关重构禁令 |
+| 自审循环与成本膨胀 | 死循环、Token/延迟增加 | 默认 suggest、opt-in auto-once、Branch-local generation 与每任务最多一次 |
 | Pi API 变化 | Extension 失效 | Spike、精确开发依赖、CI 和真实 Pi 生命周期矩阵；peer `*` 不作为兼容证据 |
 
 ## 18. 待确认事项与阶段 0/1 决策
@@ -415,15 +469,22 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 | 首批确定性 Observation | 已决 | 已实现注入、注解、事务、异常、日志、返回包装、映射、null 和依赖形态等信号 |
 | 候选搜索性能 | 已决 | 文件索引 + 路径初筛 + Top 20 深分析 + 最终 2～4 peer |
 | Snapshot freshness | 已决 | 校验 mtime、size、SHA-256、配置版本和分析器版本 |
-| Observe 运行多少真实任务后发布 Guard | 待企业项目评估 | 实验 Guard 已实现但默认仍为 Observe；完成 20～30 个任务并达到 80% / 90% / 10% 门槛后决定发布 |
+| Observe 运行多少真实任务后发布 Guard | 已决 | 24 个 SnailJob/SnailAI 任务达到 93.5% / 100% / 4.2%，准入通过；Guard 仍默认 Observe 并保持 experimental opt-in |
 | V1.1 是否使用 `appendEntry` 持久化 Snapshot | 部分已决 | Ledger 已升级到兼容 v1/v2 的 v3 custom entry；Snapshot 仍只在内存并按分支重建 |
 | Guard 对 weak/mixed/no-peer 的策略 | 已决 | Guard 只拦 Discovery 缺口；weak/mixed/no-peer 和低 Scope fail-open，避免永久阻塞 |
 | 新文件 Guard | 已决 | 使用 prospective Snapshot；有 Evidence 时先注入再 write，无 peer 时放行 |
 | bypass 与项目例外 | 已决 | 精确路径单次 bypass，不跨分支；项目例外使用 `guard.pathExceptions` glob |
 | Post-change 使用 Git diff、watcher 或组合 | 已决 | 使用执行前 Git baseline、dirty fingerprint、执行后状态/HEAD diff；不采用常驻 watcher |
 | 第三方工具映射 | 已决 | 受信配置显式声明 `toolName + operation + pathField`；内置映射不可覆盖 |
-| pi-lens 联调 | 待更多真实任务 | 未映射诊断工具不进入 Guard；仍需真实同时安装验证无死循环 |
+| pi-lens 联调 | 已决 | Pi `0.87.1` 与 pi-lens `4.2.1` 真实共存通过；未映射诊断不进入 read/mutation Evidence，无重复阻断或死循环 |
 | Project Profile 生命周期 | 已决 | candidate → validate/fingerprint → semantic diff → 显式批准 → adopt；默认 draft |
 | Pack 权威性 | 已决 | Global Pack 永远 advisory，只由受信 Profile 显式启用 |
 | Profile 加载边界 | 已决 | 一仓库一 Profile；只按 Pi 启动仓库加载，外部仓库 Profile 为 `ignored` |
 | Profile 注入策略 | 已决 | 不注入完整 Profile，只生成目标相关 Knowledge Capsule，并与 Snapshot 共享预算 |
+| Local Convention 是否代表优秀实践 | 已决 | 不代表；Local Evidence 只描述当前 Scope 事实，Engineering Practice 使用独立 Signal、审核原则和语义自审 |
+| Practice 是否进入 Convention Guard | 已决 | 不进入；缺注释、方法复杂或未使用模式不作为 Discovery Guard reason code |
+| Practice 自审模型 | 已实现 | 只使用当前 Agent，默认 suggest；opt-in auto-once 每任务最多一次，不调用第二个 LLM |
+| Practice Profile schema | 已决 | P3 未证明专用 schema 的必要性；继续复用 knowledge/convention，未来只有声明式 trigger 需求被新证据证明后才重议 |
+| Practice 默认策略 | 已决 | P3 18/18 正确但 auto-once 无行为修复且有额外 continuation；默认保持 suggest，auto-once 继续 opt-in |
+| `scope-unknown` Practice fallback | 已实现 | 仅限 successful-read existing production target；不创建 Snapshot/peer evidence，不改变 Guard |
+| Guard 与 Practice 实施顺序 | 已决 | Guard 准入、Practice Advisory、opt-in auto-once、前后架构审查、P3 独立质量评估和 fallback 评估均已完成 |

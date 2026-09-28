@@ -1,11 +1,12 @@
 # pi-convention-sense V1 技术设计方案
 
 > 文档状态：方案草案（Draft）
-> 版本：V1.1
+> 版本：V1.2 Draft
 > 源文档标注更新日期：2026-09-17
 > 当前架构融合日期：2026-09-23
 > 对应需求文档：[requirements.md](./requirements.md)
 > Project Intelligence 深入设计：[project-intelligence.md](./project-intelligence.md)
+> Engineering Practice 深入设计：[engineering-practice.md](./engineering-practice.md)
 
 ## 1. 设计概述
 
@@ -21,11 +22,14 @@ Extension 负责：
 - effective role、Knowledge Capsule 与 Local Evidence 的统一预算注入；
 - edit/write 前 Guard；
 - Session、Branch、Freshness 和运行时账本管理；
-- 可选后置审计。
+- 可选后置审计；
+- 已实现的 Practice Signal、Practice Capsule、`scope-unknown` 有界 fallback 与当前 Agent 一次性工程自审。
 
 Project Profiler Skill 只承担用户显式触发的 Profile `init/adopt/refresh/diff` 流程，不作为正常编码链路的强依赖。它使用当前 Agent 生成 candidate，必须经过 validate、semantic diff 和显式批准，不能静默覆盖 active Profile。
 
-V1.1 的正常运行链路采用确定性本地分析，不引入第二个 LLM，不自动重构，也不根据单次观察修改 `AGENTS.md` 或 Project Profile。可版本控制的长期项目知识只通过显式 Profile 生命周期建立。
+当前已实现的 V1.1 正常运行链路采用确定性本地分析，不引入第二个 LLM，不自动重构，也不根据单次观察修改 `AGENTS.md` 或 Project Profile。可版本控制的长期项目知识只通过显式 Profile 生命周期建立。
+
+V1.2 Engineering Practice Advisory MVP 与 opt-in `auto-once` 已实现。它不会把遗留代码多数写法视为优秀实践，而是把可解释结构信号、既有 Knowledge Capsule、有界审查问题和任务内 mutation relevance 组合起来；method-level diff 与测试关联仍须由质量证据证明必要性。
 
 ## 2. 可行性与 Pi API 边界
 
@@ -38,7 +42,8 @@ V1.1 的正常运行链路采用确定性本地分析，不引入第二个 LLM�
 | 每次模型调用前动态注入 | `context` | Snapshot 的主要注入点 |
 | 跟踪已完成读取 | `tool_result` | 只记录成功结果 |
 | 修改前检查和阻止 | `tool_call` | 可 block 当前调用，但不能暂停后原地恢复 |
-| 任务结束检查 | `agent_settled` | 用于可选后置审计 |
+| 任务结束检查 | `agent_settled` | 用于最终通知型后置审计 |
+| 结束前一次性自审 | `agent_before_settle` | 只有高价值 Practice Signal 时才允许当前 Agent 继续一次，必须防循环 |
 | Discovery/诊断能力 | `registerTool()` | 可注册自定义工具 |
 | 扩展状态持久化 | `appendEntry()` / SessionManager | V1 先用内存，V1.1 再持久化 |
 
@@ -49,6 +54,8 @@ V1.1 的正常运行链路采用确定性本地分析，不引入第二个 LLM�
 - edit/write 可以可靠拦截；Shell、PowerShell 和第三方工具直接修改文件时只能通过后置检测补足。
 - Pi Session 是分支结构，Snapshot 和账本必须按 Branch 隔离，不能直接使用跨 Branch 的全局 Map。
 - 频繁重写完整 System Prompt 可能降低 Prompt cache 命中率；稳定原则放 guideline，动态证据放 `context`。
+- `agent_before_settle` 的无条件 `continue: true` 会形成循环；Practice Review 必须使用 Branch-local generation、有效 Signal 和每任务最多一次的硬边界。
+- Engineering Practice 可以使用当前会话模型做一次性语义自审，但不得调用第二个 LLM，也不得在没有有效 Signal 的简单任务中增加模型请求。
 
 ## 3. 总体架构
 
@@ -66,9 +73,14 @@ flowchart TD
     R --> Q["Knowledge Capsule"]
     E --> X["Unified Context Budget"]
     Q --> X
+    M["Task / Change Signals"] --> V["Practice Advisor"]
+    R --> V
+    V --> X
     X --> G["Coding Agent"]
     B --> F["Convention Guard"]
     F --> G
+    G --> Z["Mutation Relevance + One-shot Review"]
+    Z --> G
     G --> H["pi-lens / 编译 / 测试"]
     J["Project Profiler Skill"] --> Y["Profile Candidate"]
     Y --> P
@@ -88,6 +100,9 @@ flowchart TD
 | Capsule Formatter / Context Injector | 在统一 token 预算内注入目标相关知识和局部证据 | 不注入完整 Profile 或源码正文 |
 | Convention Guard | edit/write 前校验 Discovery 是否充分 | 不因 Profile/Pack/风格差异阻断 |
 | Post-change Auditor | 发现绕过前置 Guard 的变更和重大证据缺口 | 不自动重构 |
+| Practice Signal Analyzer | 从目标源码提取职责、状态、事务、副作用、兼容和变化轴信号 | 不把复杂度直接等同于坏代码 |
+| Practice Capsule Formatter | 选择少量目标相关工程审查问题并共享 Context 预算 | 不强制补注释、拆分或使用模式 |
+| Practice Review Runtime | 归纳 mutation relevance，通过当前 Agent 至多自审一次并隔离 Session/Branch generation | 不调用第二个 LLM，不无限继续 |
 | Project Profiler Skill | candidate-first 地创建和刷新可审核 Profile | 不进入每轮编码链路，不调用第二个模型 |
 
 ### 3.2 设计原则
@@ -95,7 +110,9 @@ flowchart TD
 - 主路径是 Proactive Discovery，Guard 只兜底；
 - 三层信息源为 Global Pack、Project Profile/Knowledge、Local Evidence；
 - Global Pack 永远 advisory，draft Profile 中的 hard 项运行时降级为 advisory；
-- Local Evidence 是当前 Scope 的代码事实，不自动回写 Profile；
+- Local Evidence 是当前 Scope 的代码事实，不自动回写 Profile，也不等同于优秀工程实践；
+- Engineering Practice 是与 Local Convention 正交的 advisory 能力，必须由结构信号、审核原则或明确任务风险触发；
+- 注释以解释非显然的“为什么”为目标，拆分以责任边界为目标，设计模式必须先证明真实变化轴；
 - 一个 Git repository 对应一个 Profile，Profile trust 只属于 Pi 启动仓库；
 - 先 Observe 收集数据，再开启 Guard；
 - 用户要求和可执行检查始终高于项目知识与局部惯例；
@@ -170,6 +187,19 @@ When modifying existing code:
 - Explicit instructions and executable checks take precedence.
 - Avoid unrelated refactors made only to enforce stylistic consistency.
 ```
+
+### 4.5 Engineering Practice 路径
+
+Advisory MVP 已实现：
+
+1. Context 前优先分析已成功读取、已形成 Snapshot 且实际进入预算的现有 production target；若 Observe 仅因 `scope-unknown` 无法形成 Snapshot，则可对 successful-read existing production target 执行有界 Practice-only fallback；
+2. 使用确定性词法信号识别事务/副作用、职责维度、状态/持久化、failure path、兼容意图和多分支变化轴；
+3. 在 Local Snapshot 之后用剩余总预算注入 `<engineering-practice status="advisory">`，不允许 Practice 挤掉 Guard 依赖的 Snapshot；fallback 不创建 Scope、Snapshot、candidate 或 peer evidence；
+4. 无有效 Signal、prospective target、非 production path、超大文件或分析错误均 fail-open，不产生 Capsule；
+5. Agent 在规划和编码时把问题作为审查提示，而不是强制结论；
+6. 修改后仍由 pi-lens、编译、lint 和测试完成机器验证。
+
+opt-in `auto-once` 已在 `agent_before_settle` 实现：任务内受控 mutation 先归纳为 `relevant | unknown | irrelevant`，再结合修改后 production target 的 Snapshot/Signal；`scope-unknown` 时复用同一 successful-read fallback。只有相关 mutation 和有效 Signal 同时存在时，才请求当前 Agent 至多继续一次。
 
 ## 5. 核心数据模型
 
@@ -312,6 +342,8 @@ Profile/Pack refinement 在 base Scope 之后执行。例如 Java `controller` �
 
 - 候选必须位于目标 Git repository，related project 只可作为 metadata；
 - 扩展名/语言与 base role 必须兼容；
+- Java `service-interface` 候选必须与目标 declaration kind 兼容，避免接口借用实现类 Evidence；
+- TypeScript/Vue 非通用文件名使用语义后缀（如 `search`、`drawer`、`tab`）参与初筛和评分；
 - Profile 生效后，候选必须与目标 effective role 兼容；
 - workspace 项目默认限制在同 package；
 - 排除目标文件本身；
@@ -330,6 +362,7 @@ score =
 + 15 * samePackageOrSibling
 + 10 * annotationSimilarity
 +  8 * interfaceOrSuperclassSimilarity
++ 20 * semanticFileSuffixMatch  # TypeScript/Vue only
 +  7 * importJaccard
 +  3 * recentlyMaintained
 +  2 * sizeSimilarity
@@ -524,7 +557,50 @@ reasonCode 示例：
 - 不对 Low/Mixed 风格差异硬阻止；
 - 分析异常默认 fail-open 并记录；
 - bypass 必须可观测，避免静默绕过；
-- Guard 错误信息必须能指导 Agent 下一轮自行补救。
+- Guard 错误信息必须能指导 Agent 下一轮自行补救；
+- `MISSING_COMMENT`、`METHOD_TOO_COMPLEX`、`DESIGN_PATTERN_REQUIRED` 等主观结论不得成为 Convention Guard reason code。
+
+## 10.5 Engineering Practice Advisor（P1/P2/P3 与 fallback 已实现）
+
+Engineering Practice 不从多数代码自动学习“优秀”，也不扩张 Convention Guard。详细设计见 [engineering-practice.md](./engineering-practice.md)。
+
+当前数据流：
+
+```text
+injected Snapshot target or bounded scope-unknown successful-read target
+  + existing project knowledge
+  -> deterministic Practice Signals
+  -> confidence / target relevance / deduplication
+  -> remaining shared Context budget
+  -> bounded Practice Capsule
+  -> current Agent implementation
+```
+
+P2 数据流已追加：
+
+```text
+before_agent_start -> task generation
+successful edit/write or audited Shell source path -> bounded mutation relevance
+read production target + refreshed Snapshot or scope-unknown fallback -> deterministic Practice Signals
+agent_before_settle -> one bounded custom review message -> current Agent continues once
+```
+
+Review Runtime 只保存当前 task generation、路径、relevance 和 requested bit；不进入 checkpoint、Guard 或 Profile。
+
+Practice Signal 首批已覆盖：
+
+- 职责边界：目标同时出现至少三个校验、状态转换、持久化、外部调用或响应组装维度；
+- 状态与持久化：状态转换和持久化调用同时出现；
+- 事务与副作用：transaction marker 与外部调用同时出现；
+- failure path：fallback、retry、recovery、rollback 或 compensation marker；
+- 兼容意图：legacy、compatibility、workaround 或 migration marker；
+- 变化轴：同一目标存在至少三个 case 或 type-dispatch site。
+
+P2 只加入不保存正文的 mutation relevance，没有建立平行 Git/diff runtime。P3 未证明 method-level diff、公共 contract 或测试关联值得新增 runtime，因此继续不实现。
+
+Signal 只产生审查问题，不直接指定模式。简单函数、数据驱动映射和局部拆分必须优先于额外抽象；注释应解释 why，而不是翻译代码。
+
+当前 `practiceReview.mode` 支持 `off | suggest | auto-once`，默认 `suggest`；`maxContextTokens` 默认 400。suggest Capsule 受总 Context 预算约束，one-shot message 受同一独立上限约束。日志只保存 generation、action/reason、Signal id、计数、预算和耗时，不保存源码、edit/write 正文、完整问题、diff、prompt 或自审正文。
 
 ## 11. Session、Branch、缓存与 Freshness
 
@@ -601,6 +677,10 @@ appendEntry("convention-snapshot", snapshot)
     "notify": true,
     "maxChangedFiles": 100
   },
+  "practiceReview": {
+    "mode": "suggest",
+    "maxContextTokens": 400
+  },
   "toolMappings": [],
   "logging": {
     "level": "info",
@@ -619,6 +699,8 @@ Project Profile 固定使用启动仓库下的 `.convention-sense/profile.json`�
 - 非法配置输出诊断并回退安全默认值；
 - 配置变化使相关 Snapshot 失效；
 - V1 默认 `mode = observe`、Guard 关闭、fail-open。
+
+Engineering Practice 使用独立配置：`practiceReview.mode` 接受 `off | suggest | auto-once`，默认 `suggest`；`practiceReview.maxContextTokens` 默认为 400，范围为 120～1200。suggest 仍受全局 `maxContextTokens` 限制；auto-once 复用该上限约束 review message。一次性语义由 Runtime 固定保证，不增加可配置 `maxReviewsPerTask`。
 
 ## 13. 项目结构
 
@@ -648,6 +730,7 @@ pi-convention-sense/
 │   │   ├── runtime.ts
 │   │   └── tool-mapping.ts
 │   ├── profile/                  # Pack、Profile、Selector、Resolver 与 Capsule
+│   ├── practice/                 # Signal analyzer、Capsule formatter 与 one-shot Review Runtime
 │   └── runtime/                  # 配置、Context、状态、日志和 Pi 生命周期基础设施
 │       ├── config.ts
 │       ├── context.ts
@@ -669,6 +752,7 @@ pi-convention-sense/
     ├── core.test.ts
     ├── observe.test.ts
     ├── guard.test.ts
+    ├── practice.test.ts
     └── extension.test.ts
 ```
 
@@ -680,7 +764,7 @@ pi-convention-sense/
 | --- | --- | --- |
 | `AGENTS.md` | 架构、安全、依赖、流程硬约束 | 优先级高于 Local Convention；本项目只读取，不自动修改 |
 | agent-md-management | 长期维护 `AGENTS.md` | 与会话内局部证据分工 |
-| pi-lens | LSP、format、lint、type、结构和影响诊断 | 承担机器可验证层，避免重复实现和重复拦截 |
+| pi-lens | LSP、format、lint、type、结构和影响诊断 | 承担机器可验证层；Practice 保持 advisory，不重复实现或重复拦截可执行检查 |
 | pi-conventions | 文件位置、命名、依赖边界等显式策略 | 可作为未来 Hard Architecture Policy，不是 V1 核心依赖 |
 | pi-simplify / Reviewer | 修改后审查与简化 | 可消费 Snapshot，但不能演变为通用“代码洁癖”评审 |
 
@@ -710,9 +794,10 @@ Observe 模式至少记录：
 - Snapshot 的生成、命中、失效和重建；
 - Context 注入的 Scope、Token 估算和裁剪情况；
 - Guard 的 `allow / wouldBlock / block`、reasonCode 和 bypass；
-- Shell 后置检测和审计缺口。
+- Shell 后置检测和审计缺口；
+- Practice Signal id、confidence、触发计数、fallback count、预算、review generation 和耗时。
 
-日志不得无控制地复制完整源码。
+日志不得无控制地复制完整源码。Practice 日志同样禁止保存源码 diff、完整 prompt、自审正文或完整命令。
 
 ## 17. 测试方案
 
@@ -724,7 +809,8 @@ Observe 模式至少记录：
 - Confidence：阈值边界；
 - Snapshot Cache：命中、过期、配置变化和 Branch 隔离；
 - Formatter：Token 预算、Low/Mixed 裁剪和结构完整性；
-- Guard：Observe、Guard、bypass、新文件、弱证据、fail-open。
+- Guard：Observe、Guard、bypass、新文件、弱证据、fail-open；
+- Practice：Signal 正反例、why-comment 问题、真实变化轴、mutation relevance、预算、弱信号 fail-open 和 one-shot review generation。
 
 ### 17.2 集成测试
 
@@ -735,7 +821,10 @@ Observe 模式至少记录：
 - Evidence 文件变化后 Snapshot stale；
 - Branch A/B 切换不串用状态；
 - Shell 修改后 `agent_settled` 审计发现缺口；
-- 与 pi-lens 同时启用时无重复拦截或死循环。
+- 与 pi-lens 同时启用时无重复拦截或死循环；
+- Practice `suggest` 不改变 Guard 决策；
+- Practice `auto-once` 每个任务最多继续一次，Session/Branch 切换后不串用 generation；
+- 简单修改、弱信号和分析异常不触发自审。
 
 ### 17.3 Fixture 仓库
 
@@ -809,13 +898,35 @@ Observe 模式至少记录：
 - TypeScript/Vue Adapter 与 workspace package 隔离；
 - SnailJob 后端与前端全栈真实验证。
 
-### 阶段 4：后续产品化与扩展
+### 阶段 4：Engineering Practice（P1 Advisory + P2 auto-once 已实现）
+
+已完成：
+
+- Practice Signal 数据模型和确定性结构分析；
+- 与 Knowledge Capsule/Local Snapshot 共享总预算的 Practice Capsule；
+- 复用现有 Profile knowledge/convention，不扩 Profile schema；
+- 默认 `suggest`、可配置 `off` 的 advisory 流程；
+- 简单代码、prospective/non-production path 和分析错误 fail-open；
+- Signal/Capsule/Extension/config/预算/隐私自动测试；
+- opt-in `auto-once`、Branch-local task generation、mutation relevance 和防循环 Runtime；
+- Pi `0.87.1` negative/positive 真实生命周期验证；
+- `scope-unknown` Practice-only fallback、真实 provider 正例与简单 API wrapper 负例。
+
+P1 前置架构必要性审查见[审查结果](evaluations/architecture-necessity-review.md)，P2 证据见[auto-once 验证](evaluations/practice-auto-once-results.md)。
+
+后置整体架构复审已完成，调整了 Pi boundary 投影语义、简单 mutation relevance、suggest/auto 模式重复分析和 Extension 内确定性 planner；详见[复审结果](evaluations/auto-once-architecture-review.md)。
+
+P3 真实质量评估也已完成：18/18 mode run 正确，简单任务干扰 0/2，没有机械注释、过度拆分或模式滥用；详见[质量结果](evaluations/practice-quality-p3-results.md)。默认继续为 `suggest`，`auto-once` 保持 opt-in，Profile schema 和 method-level runtime 不扩展。
+
+`scope-unknown` 有界 Practice-only fallback 已完成；它只接受 successful-read existing production target，不伪造 Snapshot/peer evidence，也不改变 Guard fail-open。详见[评估结果](evaluations/practice-scope-unknown-fallback-results.md)。
+
+### 阶段 5：后续产品化与扩展
 
 - 更多真实开源仓库和跨项目兼容矩阵；
 - 更多语言/框架 Adapter 与可组合 Pack；
 - Pi 新版本兼容验证、CI 和发布自动化；
-- 在不调用第二个模型的前提下评估 AST、Git 历史和语义信号；
-- Guard 继续保持 experimental opt-in，达到真实准入门槛前不默认启用。
+- 在不调用第二个模型的前提下评估 AST、Git 历史和更强语义信号；
+- Guard 已达到既定真实准入门槛，但继续保持 experimental opt-in 和默认 Observe；扩大默认启用范围需要新的产品决策与证据。
 
 ## 19. 已确定的设计决策
 
@@ -835,7 +946,13 @@ Observe 模式至少记录：
 - 默认先 Observe，真实评估后再 Guard；
 - pi-lens 负责机器可验证问题；
 - Shell 修改主要通过后置检测处理；
-- 配置文件只控制行为，项目知识写入声明式 Profile。
+- 配置文件只控制行为，项目知识写入声明式 Profile；
+- Local Evidence 描述项目现状，不代表优秀工程实践；
+- Engineering Practice 与 Convention Guard 分离，首版只 advisory；
+- 注释建议聚焦 why，拆分聚焦责任边界，设计模式必须有真实变化轴；
+- Practice 自审只使用当前 Agent，默认不自动继续，opt-in auto-once 每任务最多一次；
+- Practice Review Runtime 只保存当前 task generation、mutation relevance 和 requested bit，不进入 checkpoint；
+- 受控简单修改先做 relevance 过滤，Shell 复用既有 Git 后置审计，不建立平行 diff runtime。
 
 ## 20. 技术待确认项与 Spike 结论
 
@@ -908,17 +1025,32 @@ Observe 模式至少记录：
 - 稳定指导改为由 `before_agent_start` 更新 normalized `systemPromptOptions.sections["pi-convention-sense"]`，不再返回完整 `systemPrompt`；
 - 动态 Snapshot 与 Knowledge Capsule 继续通过非持久化 custom `context` message 注入；
 - 独立 `--no-session` Pi 0.87.1 子进程已验证 `session_start → before_agent_start → context → agent_settled → session_shutdown`；
-- 0.87.1 下 strict TypeScript、clean build 和 56 个自动测试全部通过。
+- 0.87.1 下 strict TypeScript、clean build 和 70 个自动测试全部通过。
 
 详见 [compatibility.md](./compatibility.md)。
 
-### 20.6 Guard 生产准入仍需确认
+### 20.6 Guard 生产准入结论与剩余边界
 
-- 20～30 个更多真实任务中的 Top-K 认可率、Observation 准确率和潜在误拦截率；
-- 是否因真实误判升级完整 Java parser；
-- 与 pi-lens 同时安装后的重复拦截和死循环测试；
-- HEAD 变化、复杂 rename 和超大 dirty worktree 的真实项目表现；
-- Guard 是否只作为 opt-in，或具备更广泛启用条件。
+既定准入门槛已通过：24 个 SnailJob/SnailAI 任务的 Top-K 认可率为 93.5%，High Observation 准确率为 100%，潜在误拦截率为 4.2%；真实 pi-lens 共存、TUI bypass/Session/Branch/reset 和 HEAD 变化 Shell 审计均通过。详见[永久准入报告](evaluations/guard-production-readiness-results.md)。
+
+仍保留以下边界：
+
+- 当前误判证据不足以引入完整 Java parser，继续观察 `WebController` 等宽候选；
+- 复杂 rename 和超大 dirty worktree 不在本次准入样本内；
+- Guard 继续 experimental opt-in 和默认 Observe；扩大默认启用需独立产品决策；
+- 未验证 Pi/OS/技术栈不得据此扩大兼容声明。
+
+### 20.7 Engineering Practice 已决事项
+
+- 不把 Local Convention 当作优秀实践；
+- 不把注释、复杂度或设计模式判断加入 Convention Guard；
+- 默认 `suggest`，只使用当前 Agent，不调用第二个 LLM；
+- `agent_before_settle` 每任务最多一次，`auto-once` 保持 opt-in；
+- P3 question 人工适用率为 suggest 5/7、auto-once 4/4；简单任务干扰 0/2；
+- `auto-once` 本轮没有修复行为问题，证据不支持默认启用；
+- 不新增 Profile `practices` schema、method-level diff、parser 或测试映射 runtime；
+- provider task 暴露的 `scope-unknown` 覆盖缺口已由有界 Practice-only fallback 关闭；只允许 successful-read existing production target；
+- Guard 始终 Discovery-only，不受上述后续项影响。
 
 ## 21. 参考资料
 
@@ -933,4 +1065,16 @@ Observe 模式至少记录：
 
 ## 22. 推荐下一步
 
-以当前 Java + TypeScript/Vue + Project Intelligence 闭环为基线，优先完成目标 Pi 新版本兼容验证、更多不同组织结构的真实仓库矩阵以及 pi-lens 组合验证。继续保持 Observe 默认和 Guard experimental opt-in；达到跨项目真实任务门槛后，再决定 Guard 是否具备更广泛启用条件。
+当前执行顺序：
+
+1. Engineering Practice 需求与设计已冻结；
+2. `/convention-snapshot` 提示、pi-lens 共存、真实 TUI bypass、HEAD 变化 Shell 和 24 个 Observe/Shadow Guard 任务已完成；
+3. Guard 生产准入已通过，同时继续保持 experimental opt-in 与默认 Observe；
+4. Practice Signal + Practice Capsule advisory MVP 已实现；
+5. P1 整体架构必要性与耦合审查已通过；
+6. opt-in `auto-once` 当前 Agent 自审已实现并完成 Pi `0.87.1` 生命周期验证；
+7. P2 后置整体架构复审已通过并完成必要调整；
+8. P3 真实质量评估已完成，默认保持 `suggest`，不扩 method-level runtime 或 Profile schema；
+9. `scope-unknown` 下的有界 Practice-only fallback 已完成真实 provider 正例、简单 wrapper 负例和自动生命周期验证。
+
+因此后续 Engineering Practice 可以建立在已经验证的 pi-lens、Context、Session/Branch、Shell 和隐私生命周期之上，不需要继续扩张 Runtime。

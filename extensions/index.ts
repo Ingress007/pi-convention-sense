@@ -35,6 +35,17 @@ import {
 } from "../src/observe/typescript-analyzer.js";
 import { BUILTIN_CONVENTION_PACKS } from "../src/profile/builtin-packs.js";
 import { loadProjectProfile } from "../src/profile/profile-loader.js";
+import { formatOneShotPracticeReview } from "../src/practice/capsule-formatter.js";
+import {
+  classifyPracticeMutationInput,
+  planPracticeReviewBoundary,
+  PracticeReviewRuntime,
+} from "../src/practice/review-runtime.js";
+import {
+  analyzePracticeSnapshot,
+  analyzePracticeTarget,
+} from "../src/practice/signal-analyzer.js";
+import type { PracticeAnalysisResult } from "../src/practice/types.js";
 import { applyStableGuidanceSection, createDynamicContextMessage } from "../src/runtime/context.js";
 import { loadSpikeConfig, resolveLogPath } from "../src/runtime/config.js";
 import { NdjsonSpikeLogger, type LogMetadata } from "../src/runtime/logger.js";
@@ -57,6 +68,7 @@ import {
 } from "../src/runtime/types.js";
 
 const STATUS_KEY = "pi-convention-sense";
+const PRACTICE_REVIEW_MESSAGE_TYPE = "pi-convention-sense-practice-review";
 const MAX_ACTIVE_SNAPSHOTS = 4;
 const MAX_ACTIVE_PATHS = 20;
 
@@ -132,6 +144,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   const snapshotCache = new SnapshotCache();
   const guardRuntime = new GuardRuntime();
   const postChangeAudit = new PostChangeAuditRuntime();
+  const practiceReviewRuntime = new PracticeReviewRuntime();
   const shellBaselines = new Map<string, ShellBaseline>();
   const analysisReasons = new Map<string, AnalyzeTargetResult["reason"]>();
   let guardRequestedTargets: string[] = [];
@@ -265,15 +278,15 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     return result;
   };
 
-  const ensureActiveSnapshots = (ctx: ExtensionContext): ConventionSnapshot[] => {
-    const activePaths: string[] = [];
+  const activeTargetPaths = (): string[] => {
+    const paths: string[] = [];
     const addPath = (path: string) => {
       if (
-        activePaths.length >= MAX_ACTIVE_PATHS ||
+        paths.length >= MAX_ACTIVE_PATHS ||
         !configuredSourceLanguage(path, config) ||
-        activePaths.includes(path)
+        paths.includes(path)
       ) return;
-      activePaths.push(path);
+      paths.push(path);
     };
 
     for (let index = guardRequestedTargets.length - 1; index >= 0; index -= 1) {
@@ -283,9 +296,15 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     for (let index = state.recentReads.length - 1; index >= 0; index -= 1) {
       const record = state.recentReads[index];
       if (record) addPath(record.path);
-      if (activePaths.length >= MAX_ACTIVE_PATHS) break;
+      if (paths.length >= MAX_ACTIVE_PATHS) break;
     }
+    return paths;
+  };
 
+  const ensureActiveSnapshots = (
+    ctx: ExtensionContext,
+    activePaths = activeTargetPaths(),
+  ): ConventionSnapshot[] => {
     const activeSnapshots: ConventionSnapshot[] = [];
     const activeScopeKeys = new Set<string>();
     for (const path of activePaths) {
@@ -311,6 +330,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     snapshotCache.clear();
     guardRuntime.clear();
     postChangeAudit.clear();
+    practiceReviewRuntime.reset();
     shellBaselines.clear();
     analysisReasons.clear();
     guardRequestedTargets = [];
@@ -376,6 +396,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
 
     for (const path of changedSources) {
       snapshotCache.invalidatePath(path, "shell-post-change");
+      if (config.practiceReview.mode === "auto-once") practiceReviewRuntime.recordMutation(path);
     }
     if (changedSources.length > 0) analyzer.invalidateIndex();
     for (const path of gaps) postChangeAudit.addGap(path);
@@ -417,6 +438,8 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       recentReadCount: state.recentReads.length,
       customToolMappingCount: config.toolMappings.length,
       postChangeAuditEnabled: config.postChangeAudit.enabled,
+      practiceReviewMode: config.practiceReview.mode,
+      practiceMaxContextTokens: config.practiceReview.maxContextTokens,
     });
     if (config.enabled) ensureActiveSnapshots(ctx);
     refreshStatus(ctx);
@@ -466,7 +489,16 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       imageCount: event.images?.length ?? 0,
       selectedTools: event.systemPromptOptions.selectedTools ?? [],
     });
-    if (!config.enabled) return;
+    if (!config.enabled) {
+      practiceReviewRuntime.reset();
+      return;
+    }
+    if (config.practiceReview.mode === "auto-once") {
+      const generation = practiceReviewRuntime.beginTask();
+      log(ctx, "practice_review_task_started", { generation });
+    } else {
+      practiceReviewRuntime.reset();
+    }
     applyStableGuidanceSection(event.systemPromptOptions.sections);
   });
 
@@ -478,13 +510,39 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   });
 
   pi.on("context", async (event, ctx) => {
-    const snapshots = config.enabled ? ensureActiveSnapshots(ctx) : [];
+    const activePaths = config.enabled ? activeTargetPaths() : [];
+    const snapshots = config.enabled ? ensureActiveSnapshots(ctx, activePaths) : [];
     const appendedMessages: typeof event.messages = [];
     let includedSnapshots: ConventionSnapshot[] = [];
+    let practiceAnalyses: PracticeAnalysisResult[] = [];
 
     if (config.enabled && config.injectContext) {
+      if (config.practiceReview.mode === "suggest") {
+        practiceAnalyses = snapshots.map((snapshot) => analyzePracticeSnapshot(snapshot));
+        const snapshotTargets = new Set(snapshots.map((snapshot) => snapshot.targetPath));
+        for (const path of activePaths) {
+          if (practiceAnalyses.length >= MAX_ACTIVE_SNAPSHOTS) break;
+          if (
+            snapshotTargets.has(path) ||
+            analysisReasons.get(path) !== "scope-unknown" ||
+            !state.successfulReads.has(path) ||
+            !existsSync(path)
+          ) continue;
+          const language = configuredSourceLanguage(path, config);
+          if (!language || !isConfiguredProductionSource(path, config)) continue;
+          const repositoryRoot = resolveAnalysisRepositoryRoot(path, ctx.cwd);
+          if (matchesExcludedPath(repositoryRoot, path, config.exclude)) continue;
+          practiceAnalyses.push(analyzePracticeTarget(path, repositoryRoot, language));
+        }
+      }
       state.contextInjectionCount += 1;
-      const message = createDynamicContextMessage(config, state, snapshots, ctx.cwd);
+      const message = createDynamicContextMessage(
+        config,
+        state,
+        snapshots,
+        ctx.cwd,
+        practiceAnalyses,
+      );
       const included = new Map(
         message.details.includedSnapshots.map((item) => [item.targetPath, item.createdAt] as const),
       );
@@ -521,6 +579,24 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       snapshotCount: snapshots.length,
       injectedSnapshotCount: includedSnapshots.length,
       scopes: includedSnapshots.map((snapshot) => scopeKey(snapshot.scope)),
+      practiceAnalysisCount: practiceAnalyses.length,
+      practiceFallbackAnalysisCount: practiceAnalyses.filter(
+        (analysis) => analysis.basis === "successful-read",
+      ).length,
+      practiceSignalCount: practiceAnalyses.reduce(
+        (count, analysis) => count + analysis.signals.length,
+        0,
+      ),
+      practiceSignalIds: [...new Set(practiceAnalyses.flatMap((analysis) =>
+        analysis.signals.map((signal) => signal.id),
+      ))],
+      practiceSkippedReasons: practiceAnalyses.flatMap((analysis) =>
+        analysis.reason ? [analysis.reason] : [],
+      ),
+      practiceDurationMs: practiceAnalyses.reduce(
+        (duration, analysis) => duration + analysis.durationMs,
+        0,
+      ),
       postChangeFindingCount: auditFindings.length,
     });
     if (appendedMessages.length === 0) return;
@@ -653,6 +729,12 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     if (config.enabled && change.mutation) {
       invalidatedSnapshots = snapshotCache.invalidatePath(change.mutation.path);
       analyzer.invalidateIndex();
+      if (config.practiceReview.mode === "auto-once") {
+        practiceReviewRuntime.recordMutation(
+          change.mutation.path,
+          classifyPracticeMutationInput(change.mutation.toolName, event.input),
+        );
+      }
       log(ctx, "snapshot_invalidated", {
         path: displayPath(ctx.cwd, change.mutation.path),
         invalidatedSnapshots,
@@ -704,6 +786,107 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   });
 
   pi.on("agent_end", async (event, ctx) => log(ctx, "agent_end", { messageCount: event.messages.length }));
+
+  pi.on("agent_before_settle", async (event, ctx) => {
+    if (!config.enabled || config.practiceReview.mode !== "auto-once") return;
+
+    const startedAt = Date.now();
+    const task = practiceReviewRuntime.current();
+    const skip = (reason: string, extra: Record<string, unknown> = {}): undefined => {
+      log(ctx, "practice_review_decision", {
+        generation: task.generation,
+        action: "skip",
+        reason,
+        mutationTargetCount: task.mutations.length,
+        durationMs: Date.now() - startedAt,
+        ...extra,
+      });
+      return undefined;
+    };
+
+    const plan = planPracticeReviewBoundary({
+      task,
+      outcome: event.outcome,
+      continuationPending: event.continue || event.context.pendingMessages.length > 0,
+      successfulReads: state.successfulReads,
+      maxTargets: MAX_ACTIVE_SNAPSHOTS,
+      isEligible: (path) => {
+        const repositoryRoot = resolveAnalysisRepositoryRoot(path, ctx.cwd);
+        return existsSync(path) &&
+          isConfiguredProductionSource(path, config) &&
+          !matchesExcludedPath(repositoryRoot, path, config.exclude);
+      },
+    });
+    if (plan.action === "skip") return skip(plan.reason);
+
+    const analyses: PracticeAnalysisResult[] = [];
+    try {
+      for (const path of plan.targets) {
+        const result = analyzePath(ctx, path, "freshness");
+        if (result.snapshot) {
+          analyses.push(analyzePracticeSnapshot(result.snapshot));
+          continue;
+        }
+        if (result.reason !== "scope-unknown") continue;
+        const language = configuredSourceLanguage(path, config);
+        if (!language) continue;
+        const repositoryRoot = resolveAnalysisRepositoryRoot(path, ctx.cwd);
+        analyses.push(analyzePracticeTarget(path, repositoryRoot, language));
+      }
+    } catch (error) {
+      return skip("analysis-error", {
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+    }
+
+    const review = formatOneShotPracticeReview(analyses, config.practiceReview.maxContextTokens);
+    if (!review) {
+      return skip("no-review-capsule", {
+        analyzedTargetCount: analyses.length,
+        fallbackTargetCount: analyses.filter(
+          (analysis) => analysis.basis === "successful-read",
+        ).length,
+        practiceSignalCount: analyses.reduce((count, analysis) => count + analysis.signals.length, 0),
+      });
+    }
+    if (!practiceReviewRuntime.requestOnce()) return skip("already-requested");
+
+    log(ctx, "practice_review_decision", {
+      generation: task.generation,
+      action: "continue",
+      reason: "practice-signals",
+      mutationTargetCount: task.mutations.length,
+      analyzedTargetCount: analyses.length,
+      fallbackTargetCount: analyses.filter(
+        (analysis) => analysis.basis === "successful-read",
+      ).length,
+      practiceSignalCount: review.includedSignalIds.length,
+      practiceSignalIds: review.includedSignalIds,
+      tokenEstimate: review.tokenEstimate,
+      durationMs: Date.now() - startedAt,
+    });
+    return {
+      entries: [
+        ...event.entries,
+        {
+          type: "custom_message" as const,
+          customType: PRACTICE_REVIEW_MESSAGE_TYPE,
+          content: review.text,
+          display: false,
+          details: {
+            generation: task.generation,
+            signalIds: review.includedSignalIds,
+            targetCount: analyses.length,
+            fallbackTargetCount: analyses.filter(
+              (analysis) => analysis.basis === "successful-read",
+            ).length,
+            tokenEstimate: review.tokenEstimate,
+          },
+        },
+      ],
+      continue: true,
+    };
+  });
 
   pi.on("agent_settled", async (_event, ctx) => {
     persistCheckpoint();
@@ -765,6 +948,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       }) ?? [];
       const projectLines = [
         `config-source=${loadedConfig.usedProjectConfig ? "project" : "defaults"}`,
+        `practice=${config.practiceReview.mode}, practice-tokens=${config.practiceReview.maxContextTokens}`,
         profileParts.join(", "),
         `packs=${activePacks.join(", ") || "none"}`,
         ...(projectProfile.diagnostics.length > 0
@@ -813,7 +997,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     handler: async (_args, ctx) => {
       const snapshot = ensureActiveSnapshots(ctx)[0];
       if (!snapshot) {
-        ctx.ui.notify("No Java convention Snapshot is available on the active branch.", "warning");
+        ctx.ui.notify("No convention Snapshot is available on the active branch.", "warning");
         return;
       }
       const lines = [

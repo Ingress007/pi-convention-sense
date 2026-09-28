@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import type { JavaFileFacts, JavaRole, ScopeConfidence, SourceKind } from "./types.js";
+import type {
+  JavaDeclarationKind,
+  JavaFileFacts,
+  JavaRole,
+  ScopeConfidence,
+  SourceKind,
+} from "./types.js";
 
 interface RoleDetection {
   role: JavaRole;
@@ -14,8 +20,8 @@ const ROLE_SUFFIXES: Array<{ pattern: RegExp; role: JavaRole }> = [
   { pattern: /Service\.java$/i, role: "service-interface" },
   { pattern: /Mapper\.java$/i, role: "mapper" },
   { pattern: /Repository\.java$/i, role: "repository" },
-  { pattern: /(?:Req|Request)\.java$/i, role: "request-dto" },
-  { pattern: /(?:Resp|Response|VO)\.java$/i, role: "response-dto" },
+  { pattern: /(?:Req|Request)(?:DTO|VO)?\.java$/i, role: "request-dto" },
+  { pattern: /(?:(?:Resp|Response)(?:DTO|VO)?|VO)\.java$/i, role: "response-dto" },
   { pattern: /Entity\.java$/i, role: "entity" },
 ];
 
@@ -237,6 +243,9 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
 
   const signals = new Map<string, Set<string>>();
   const className = basename(path, ".java").replace(/[$()[\]{}.*+?^\\|]/g, "\\$&");
+  const declarationKind = structural.match(
+    new RegExp(`\\b(class|interface|enum|record)\\s+${className}\\b`),
+  )?.[1] as JavaDeclarationKind | undefined;
   const dependencyField = /\b(?:private|protected|public)\s+(?:static\s+)?(?:final\s+)?([A-Z][\w$]*(?:Service|Mapper|Repository|Client|Gateway))\s+\w+\s*;/g;
   const dependencyTypes = matchAll(structural, dependencyField);
   const hasDependencyFields = dependencyTypes.length > 0;
@@ -351,6 +360,7 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
   return {
     path,
     ...(packageName ? { packageName } : {}),
+    ...(declarationKind ? { declarationKind } : {}),
     role: role.role,
     roleConfidence: role.confidence,
     sourceKind: detectSourceKind(path),

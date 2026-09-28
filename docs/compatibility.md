@@ -19,8 +19,8 @@ GitHub Actions：`.github/workflows/ci.yml`
 
 | 操作系统 | Node 22.19.0 | Node 22.x | 验证内容 |
 |---|---:|---:|---|
-| Ubuntu latest | CI | CI | TypeScript、56 个自动测试 |
-| Windows latest | CI | CI | TypeScript、56 个自动测试 |
+| Ubuntu latest | CI | CI | TypeScript、70 个自动测试 |
+| Windows latest | CI | CI | TypeScript、70 个自动测试 |
 
 独立 package job 运行：
 
@@ -28,7 +28,7 @@ GitHub Actions：`.github/workflows/ci.yml`
 npm pack --dry-run
 ```
 
-CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 固定为 `0.87.1`，并有独立 step 断言实际安装版本，因此 TypeScript 编译和 56 个测试均针对该 API 运行。
+CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 固定为 `0.87.1`，并有独立 step 断言实际安装版本，因此 TypeScript 编译和 70 个测试均针对该 API 运行。
 
 ## 3. Pi 行为验证
 
@@ -40,18 +40,21 @@ CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 
 | named system prompt section 与 custom Context | 是 | 是 | 不适用/旧实现 |
 | read ledger 只接受成功 tool result | 是 | 真实 Pi 主流程已验证 | 是 |
 | Snapshot 创建与 Context 注入 | 是 | 真实 Pi 主流程已验证 | 是 |
-| Branch checkpoint 恢复 | 是 | 真实流程/自动测试已验证；未单独复验全部 TUI 操作 | 是 |
+| Branch checkpoint 恢复 | 是 | 真实 TUI Session/Branch 隔离已验证 | 是 |
 | Guard block → read → Context → allow | 是 | 真实 Pi 主路径已验证 | 是 |
-| 一次性 bypass | 是 | 主路径已验证；真实 TUI 手动交互仍待补充 | 部分人工验证 |
-| Shell Git 后置审计 | 是 | 真实 Pi 主路径已验证；HEAD 变化场景待补充 | 是 |
+| 一次性 bypass | 是 | 真实 TUI 精确路径、一次消费、Session/Branch 隔离已验证 | 部分人工验证 |
+| Shell Git 后置审计 | 是 | 真实 Pi dirty 与 HEAD 变化场景均已验证 | 是 |
 | Project Profile / Knowledge Capsule | 是 | Profile 启动加载与 Capsule 已验证 | 是 |
-| `/convention-reset confirm` | 是 | 真实流程已验证；未作为独立手动 TUI 门禁 | 未人工复验 |
+| Practice `suggest` / Capsule | 是 | SnailJob disposable smoke 已通过 | 不适用 |
+| Practice `auto-once` | 是 | Pi `0.87.1` negative/positive 当前 Agent continuation 已验证 | 不适用 |
+| Practice P3 质量 | 是 | SnailJob/SnailAI 6 task × 3 mode，18/18 正确；简单任务干扰 0/2 | 不适用 |
+| `/convention-reset confirm` | 是 | 真实 TUI 已验证清除未消费 bypass | 未人工复验 |
 
-当前真实评估同时覆盖了 `--print` 生命周期和带工具的 Observe/Guard 主路径，验证 `session_start → before_agent_start → context → agent_settled → session_shutdown`、read ledger、Snapshot/Context、未读目标阻断、补读后放行、Shell 后置审计和 Profile 加载。真实 TUI 手动 bypass、HEAD 变化 Shell 以及 pi-lens 同时安装联调仍不计为完成。
+当前真实评估同时覆盖了 `--print` 生命周期和带工具的 Observe/Guard 主路径，验证 `session_start → before_agent_start → context → agent_settled → session_shutdown`、read ledger、Snapshot/Context、未读目标阻断、补读后放行、真实 TUI bypass/reset/Session/Branch、dirty/HEAD 变化 Shell 审计、pi-lens `4.2.1` 共存和 Profile 加载。Practice P1 复用既有 Context hook，已通过 Extension harness 和 SnailJob disposable worktree 只读 smoke。P2 `auto-once` 已在独立 Pi `0.87.1` 进程验证 marker-free 修改不增加调用、相关修改只 continuation 一次，以及第二次 boundary `already-requested`。P3 进一步完成 18 个真实 mode run，结论为默认保持 `suggest`、`auto-once` opt-in；这不扩大语言或 Pi 版本兼容范围。
 
 ## 4. 真实项目证据
 
-SnailJob 后端与 Admin 的完整结果见 [SnailJob Pi 0.87.1 验收](evaluations/snail-job-pi-0.87.1-results.md)；SnailAI 结果见 [SnailAI Pi 0.87.1 验收](evaluations/snail-ai-pi-0.87.1-results.md)。SnailAI Admin 原生检查因缺少 `node_modules` 标记为 `ENVIRONMENT_BLOCKED`，不扩展为已验证的前端兼容声明。
+SnailJob 后端与 Admin 的完整结果见 [SnailJob Pi 0.87.1 验收](evaluations/snail-job-pi-0.87.1-results.md)；SnailAI 结果见 [SnailAI Pi 0.87.1 验收](evaluations/snail-ai-pi-0.87.1-results.md)；Stage 2 指标、TUI、pi-lens 和 HEAD 审计见 [Guard 生产准入结果](evaluations/guard-production-readiness-results.md)；Practice P1 结果见 [Advisory MVP 验证](evaluations/practice-advisory-mvp-results.md)，P2 结果见 [auto-once 验证](evaluations/practice-auto-once-results.md)，P3 结果见 [真实质量评估](evaluations/practice-quality-p3-results.md)。SnailAI Admin 原生检查因缺少 `node_modules` 标记为 `ENVIRONMENT_BLOCKED`，不扩展为已验证的前端兼容声明。
 
 ## 5. 语言与项目结构
 

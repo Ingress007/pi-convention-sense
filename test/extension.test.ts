@@ -124,6 +124,7 @@ test("extension registers the required Stage 2 lifecycle hooks and commands", ()
     "context",
     "agent_start",
     "agent_end",
+    "agent_before_settle",
     "agent_settled",
     "turn_start",
     "turn_end",
@@ -143,6 +144,21 @@ test("extension registers the required Stage 2 lifecycle hooks and commands", ()
   ]) {
     assert.ok(harness.commands.has(command), `missing command: ${command}`);
   }
+});
+
+test("convention-snapshot empty state is language-neutral", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-snapshot-command-"));
+  const harness = createHarness(cwd);
+  registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+
+  const snapshotCommand = harness.commands.get("convention-snapshot");
+  assert.ok(snapshotCommand);
+  await snapshotCommand("", harness.ctx);
+
+  const notification = harness.notifications.at(-1) ?? "";
+  assert.equal(notification, "No convention Snapshot is available on the active branch.");
+  assert.doesNotMatch(notification, /Java/);
 });
 
 test("Guard blocks a pending read, releases confirmed no-peer targets, and keeps logs private", async () => {
@@ -412,6 +428,448 @@ test("Observe extension builds, injects, and branch-rebuilds a real Java Snapsho
   assert.equal(rebuilt.length, 1);
   assert.ok(rebuilt[0]?.targetPath.endsWith("OrderServiceImpl.java"));
   assert.equal(runtime.getState().recentReads.length, 1);
+});
+
+test("Practice suggest mode injects bounded advisory questions without changing Guard", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-practice-extension-"));
+  cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+  const target = javaTarget();
+  writeFileSync(
+    join(cwd, target),
+    `
+      package com.acme.order.service.impl;
+      import org.springframework.transaction.annotation.Transactional;
+      public class OrderServiceImpl {
+        @Transactional
+        public void approve(Order order) {
+          validateOrder(order);
+          order.setStatus(APPROVED);
+          orderMapper.update(order);
+          notificationGateway.publish(order);
+        }
+      }
+    `,
+  );
+
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+  assert.equal(runtime.getConfig().practiceReview.mode, "suggest");
+
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "practice-read",
+    toolName: "read",
+    input: { path: target },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const context = await harness.invoke("context", { type: "context", messages: [] });
+  const message = context.messages.at(-1);
+  const content = String(message.content ?? "");
+  assert.match(content, /<local-convention/);
+  assert.match(content, /<engineering-practice status="advisory">/);
+  assert.match(content, /partial failure/i);
+  assert.match(content, /Comments that restate the code/);
+  assert.ok(message.details.includedPracticeSignalIds.includes("practice.transaction-side-effect"));
+  assert.ok(message.details.tokenEstimate <= runtime.getConfig().maxContextTokens);
+
+  const editDecision = await harness.invoke("tool_call", {
+    type: "tool_call",
+    toolCallId: "practice-edit",
+    toolName: "edit",
+    input: { path: target, edits: [] },
+  });
+  assert.equal(editDecision, undefined);
+
+  const statusCommand = harness.commands.get("convention-status");
+  assert.ok(statusCommand);
+  await statusCommand("", harness.ctx);
+  assert.match(harness.notifications.at(-1) ?? "", /practice=suggest, practice-tokens=400/);
+
+  const log = readFileSync(join(cwd, ".pi", "convention-sense", "observe.ndjson"), "utf8");
+  assert.match(log, /"practiceSignalCount":3/);
+  assert.match(log, /practice\.transaction-side-effect/);
+  assert.doesNotMatch(log, /notificationGateway\.publish|partial failure/);
+
+  const activeBranch = [...harness.branchEntries];
+  harness.branchEntries.splice(0);
+  await harness.invoke("session_tree", {
+    type: "session_tree",
+    oldLeafId: "practice-branch",
+    newLeafId: "empty-branch",
+  });
+  const isolatedBranch = await harness.invoke("context", { type: "context", messages: [] });
+  assert.doesNotMatch(String(isolatedBranch.messages.at(-1).content ?? ""), /engineering-practice/);
+
+  harness.branchEntries.splice(0, harness.branchEntries.length, ...activeBranch);
+  await harness.invoke("session_tree", {
+    type: "session_tree",
+    oldLeafId: "empty-branch",
+    newLeafId: "practice-branch",
+  });
+  const restoredBranch = await harness.invoke("context", { type: "context", messages: [] });
+  assert.match(String(restoredBranch.messages.at(-1).content ?? ""), /engineering-practice/);
+
+  const separateSession = createHarness(cwd);
+  registerConventionSenseSpike(separateSession.api);
+  await separateSession.invoke("session_start", { type: "session_start", reason: "startup" });
+  const isolatedSession = await separateSession.invoke("context", { type: "context", messages: [] });
+  assert.doesNotMatch(String(isolatedSession.messages.at(-1).content ?? ""), /engineering-practice/);
+});
+
+test("Practice auto-once continues the current Agent once and resets by task and Branch", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-practice-auto-once-"));
+  cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+  const target = javaTarget();
+  const absoluteTarget = join(cwd, target);
+  writeGuardConfig(cwd, {
+    maxContextTokens: 1800,
+    practiceReview: { mode: "auto-once", maxContextTokens: 400 },
+  });
+  writeFileSync(
+    absoluteTarget,
+    `
+      package com.acme.order.service.impl;
+      import org.springframework.transaction.annotation.Transactional;
+      public class OrderServiceImpl {
+        @Transactional
+        public void approve(Order order) {
+          validateOrder(order);
+          order.setStatus(APPROVED);
+          orderMapper.update(order);
+          notificationGateway.publish(order);
+        }
+      }
+    `,
+  );
+  execFileSync("git", ["init", "-q"], { cwd });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd });
+  execFileSync("git", ["add", "."], { cwd });
+  execFileSync(
+    "git",
+    ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "initial"],
+    { cwd },
+  );
+
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+  assert.equal(runtime.getConfig().practiceReview.mode, "auto-once");
+
+  const startTask = async () => harness.invoke("before_agent_start", {
+    type: "before_agent_start",
+    prompt: "update the order flow",
+    systemPrompt: "base-system",
+    systemPromptOptions: {
+      selectedTools: ["read", "edit", "bash"],
+      toolSnippets: {},
+      toolGuidelines: {},
+      promptGuidelines: [],
+      appendSystemPrompt: "",
+      sections: {} as Record<string, string>,
+      contextFiles: [],
+      skills: [],
+    },
+  });
+  const settleEvent = (
+    canContinue = true,
+    entries: any[] = [],
+    outcome: "completed" | "aborted" | "error" = "completed",
+  ) => ({
+    type: "agent_before_settle",
+    entries,
+    continue: false,
+    outcome,
+    context: {
+      contextEntries: [],
+      contextMessages: [],
+      llmMessages: [],
+      pendingMessages: [],
+      canContinue,
+    },
+  });
+
+  await startTask();
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "auto-read",
+    toolName: "read",
+    input: { path: target },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const context = await harness.invoke("context", { type: "context", messages: [] });
+  const autoContextMessage = context.messages.at(-1);
+  assert.match(String(autoContextMessage.content ?? ""), /local-convention/);
+  assert.deepEqual(
+    autoContextMessage.details.includedPracticeSignalIds,
+    [],
+    "auto-once must not duplicate suggest Capsule analysis in ordinary Context",
+  );
+
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "auto-trivial-edit",
+    toolName: "edit",
+    input: {
+      path: target,
+      edits: [{ oldText: "SECRET_AUTO_DIFF", newText: "SECRET_AUTO_REPLACEMENT" }],
+    },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const trivialReview = await harness.invoke("agent_before_settle", settleEvent());
+  assert.equal(trivialReview, undefined, "a marker-free edit must not review an unrelated complex flow");
+
+  await startTask();
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "auto-relevant-edit",
+    toolName: "edit",
+    input: {
+      path: target,
+      edits: [{
+        oldText: "notificationGateway.publish(order);",
+        newText: "notificationGateway.publishApproved(order);",
+      }],
+    },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const priorDraft = { type: "custom", customType: "prior-extension", data: { safe: true } };
+  const firstReview = await harness.invoke("agent_before_settle", settleEvent(false, [priorDraft]));
+  assert.equal(firstReview.continue, true);
+  assert.equal(firstReview.entries.length, 2);
+  assert.deepEqual(firstReview.entries[0], priorDraft, "earlier boundary drafts must be preserved");
+  const reviewEntry = firstReview.entries[1];
+  assert.equal(reviewEntry.type, "custom_message");
+  assert.equal(reviewEntry.customType, "pi-convention-sense-practice-review");
+  assert.equal(reviewEntry.display, false);
+  assert.match(reviewEntry.content, /one concise final self-review/i);
+  assert.match(reviewEntry.content, /partial failure/i);
+  assert.doesNotMatch(reviewEntry.content, /notificationGateway\.publish|SECRET_AUTO/);
+  assert.ok(reviewEntry.details.tokenEstimate <= 400);
+
+  const loopAttempt = await harness.invoke("agent_before_settle", settleEvent());
+  assert.equal(loopAttempt, undefined, "the continuation must not schedule another review");
+
+  await startTask();
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "auto-lsp",
+    toolName: "lsp",
+    input: { path: target },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const noMutation = await harness.invoke("agent_before_settle", settleEvent());
+  assert.equal(noMutation, undefined, "pi-lens diagnostics are not mutations");
+
+  await startTask();
+  const shellCommand = "node -e \"require('fs').writeFileSync('target','changed')\"";
+  await harness.invoke("tool_execution_start", {
+    type: "tool_execution_start",
+    toolCallId: "auto-shell",
+    toolName: "bash",
+    args: { command: shellCommand },
+  });
+  writeFileSync(absoluteTarget, `${readFileSync(absoluteTarget, "utf8")}\n// shell mutation\n`);
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "auto-shell",
+    toolName: "bash",
+    input: { command: shellCommand },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const shellReview = await harness.invoke("agent_before_settle", settleEvent());
+  assert.equal(shellReview.continue, true, "a detected shell source mutation should participate");
+
+  await startTask();
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "branch-edit",
+    toolName: "edit",
+    input: {
+      path: target,
+      edits: [{
+        oldText: "notificationGateway.publish(order);",
+        newText: "notificationGateway.publishApproved(order);",
+      }],
+    },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  harness.branchEntries.splice(0);
+  await harness.invoke("session_tree", {
+    type: "session_tree",
+    oldLeafId: "practice-auto-branch",
+    newLeafId: "empty-branch",
+  });
+  const branchReview = await harness.invoke("agent_before_settle", settleEvent());
+  assert.equal(branchReview, undefined, "review generation must not cross Branches");
+
+  const log = readFileSync(join(cwd, ".pi", "convention-sense", "observe.ndjson"), "utf8");
+  assert.match(log, /"event":"practice_review_decision"/);
+  assert.match(log, /"action":"continue"/);
+  assert.match(log, /"reason":"already-requested"/);
+  assert.match(log, /"reason":"no-relevant-mutation"/);
+  assert.doesNotMatch(
+    log,
+    /SECRET_AUTO_DIFF|SECRET_AUTO_REPLACEMENT|notificationGateway\.publishApproved|partial failure/,
+  );
+});
+
+test("scope-unknown Practice fallback stays read-bound, advisory, and one-shot", async () => {
+  const createProject = (prefix: string, practiceMode: "suggest" | "auto-once") => {
+    const cwd = mkdtempSync(join(tmpdir(), prefix));
+    const sourceRoot = join(cwd, "src", "main", "java", "com", "acme", "provider");
+    mkdirSync(sourceRoot, { recursive: true });
+    writeFileSync(join(cwd, "pom.xml"), "<project/>\n");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "convention-sense.json"),
+      JSON.stringify({
+        mode: "observe",
+        injectContext: true,
+        includeLanguages: ["java"],
+        practiceReview: { mode: practiceMode, maxContextTokens: 400 },
+      }),
+    );
+    return { cwd, sourceRoot };
+  };
+  const readResult = (path: string, id: string) => ({
+    type: "tool_result",
+    toolCallId: id,
+    toolName: "read",
+    input: { path },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+
+  const suggestProject = createProject("pi-convention-practice-scope-unknown-suggest-", "suggest");
+  const suggestTarget = join(suggestProject.sourceRoot, "ProviderRouter.java");
+  writeFileSync(
+    suggestTarget,
+    "class ProviderRouter { Object route(int type) { switch (type) { case 1: return a(); case 2: return b(); case 3: return c(); default: return d(); } } }\n",
+  );
+  const suggestHarness = createHarness(suggestProject.cwd);
+  const suggestRuntime = registerConventionSenseSpike(suggestHarness.api);
+  await suggestHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  await suggestHarness.invoke("tool_call", {
+    type: "tool_call",
+    toolCallId: "fallback-suggest-unread-edit",
+    toolName: "edit",
+    input: { path: suggestTarget, edits: [] },
+  });
+  const unreadContext = await suggestHarness.invoke("context", { type: "context", messages: [] });
+  assert.doesNotMatch(
+    String(unreadContext.messages.at(-1).content ?? ""),
+    /engineering-practice/,
+    "scope-unknown without a successful read must not activate fallback",
+  );
+  await suggestHarness.invoke("tool_result", readResult(suggestTarget, "fallback-suggest-read"));
+  assert.equal(suggestRuntime.getSnapshotCache().list().length, 0, "fallback must not fabricate a Snapshot");
+  const suggestContext = await suggestHarness.invoke("context", { type: "context", messages: [] });
+  const suggestMessage = suggestContext.messages.at(-1);
+  assert.match(String(suggestMessage.content ?? ""), /local-convention status="unavailable"/);
+  assert.match(String(suggestMessage.content ?? ""), /stable variation axis/i);
+  assert.deepEqual(suggestMessage.details.includedPracticeSignalIds, ["practice.variation-axis"]);
+  const suggestLog = readFileSync(
+    join(suggestProject.cwd, ".pi", "convention-sense", "observe.ndjson"),
+    "utf8",
+  );
+  assert.match(suggestLog, /"practiceFallbackAnalysisCount":1/);
+
+  const autoProject = createProject("pi-convention-practice-scope-unknown-auto-", "auto-once");
+  const autoTarget = join(autoProject.sourceRoot, "ProviderRouter.java");
+  const simpleTarget = join(autoProject.sourceRoot, "HealthClient.java");
+  writeFileSync(
+    autoTarget,
+    "class ProviderRouter { Object route(int type) { switch (type) { case 1: return a(); case 2: return b(); case 3: return c(); default: return d(); } } }\n",
+  );
+  writeFileSync(simpleTarget, "class HealthClient { Object call() { return remoteClient.get(); } }\n");
+  const autoHarness = createHarness(autoProject.cwd);
+  const autoRuntime = registerConventionSenseSpike(autoHarness.api);
+  await autoHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  const startTask = () => autoHarness.invoke("before_agent_start", {
+    type: "before_agent_start",
+    prompt: "update provider routing",
+    systemPrompt: "base-system",
+    systemPromptOptions: {
+      selectedTools: ["read", "edit"],
+      toolSnippets: {},
+      toolGuidelines: {},
+      promptGuidelines: [],
+      appendSystemPrompt: "",
+      sections: {} as Record<string, string>,
+      contextFiles: [],
+      skills: [],
+    },
+  });
+  const settleEvent = () => ({
+    type: "agent_before_settle",
+    entries: [],
+    continue: false,
+    outcome: "completed" as const,
+    context: {
+      contextEntries: [],
+      contextMessages: [],
+      llmMessages: [],
+      pendingMessages: [],
+      canContinue: false,
+    },
+  });
+
+  await startTask();
+  await autoHarness.invoke("tool_result", readResult(autoTarget, "fallback-auto-read"));
+  await autoHarness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "fallback-auto-edit",
+    toolName: "edit",
+    input: {
+      path: autoTarget,
+      edits: [{ oldText: "switch (type)", newText: "switch (normalizedType)" }],
+    },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  const review = await autoHarness.invoke("agent_before_settle", settleEvent());
+  assert.equal(review.continue, true);
+  assert.deepEqual(review.entries[0].details.signalIds, ["practice.variation-axis"]);
+  assert.equal(review.entries[0].details.fallbackTargetCount, 1);
+  assert.equal(autoRuntime.getSnapshotCache().list().length, 0);
+  assert.equal(await autoHarness.invoke("agent_before_settle", settleEvent()), undefined);
+
+  await startTask();
+  await autoHarness.invoke("tool_result", readResult(simpleTarget, "fallback-simple-read"));
+  await autoHarness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "fallback-simple-edit",
+    toolName: "edit",
+    input: {
+      path: simpleTarget,
+      edits: [{ oldText: "return remoteClient.get();", newText: "if (enabled) return remoteClient.get();" }],
+    },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  assert.equal(
+    await autoHarness.invoke("agent_before_settle", settleEvent()),
+    undefined,
+    "a scope-unknown API wrapper without a Practice Signal must not add a continuation",
+  );
 });
 
 test("TypeScript and Vue participate in Extension Snapshot, Context, and Guard lifecycles", async () => {
@@ -823,7 +1281,7 @@ test("trusted Project Profile refines candidate roles and injects a Knowledge Ca
   const snapshot = runtime.getSnapshotCache().list()[0];
   assert.ok(snapshot);
   assert.equal(snapshot.scope.effectiveRole, "mvc-view-controller");
-  assert.equal(snapshot.analyzerVersion, "multi-lexical-v5-typescript-vue-profile");
+  assert.equal(snapshot.analyzerVersion, "multi-lexical-v6-semantic-peers");
   assert.ok(snapshot.candidates.every((candidate) => !candidate.path.includes("SystemInfoController")));
   assert.ok(snapshot.candidates.every((candidate) => !candidate.path.includes("JobTaskController")));
   assert.ok(snapshot.projectContext);

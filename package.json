@@ -35,7 +35,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/core.test.js dist/test/observe.test.js dist/test/guard.test.js dist/test/profile.test.js dist/test/extension.test.js",
+    "test": "npm run build && node --test dist/test/core.test.js dist/test/observe.test.js dist/test/guard.test.js dist/test/profile.test.js dist/test/practice.test.js dist/test/extension.test.js",
     "verify": "npm run check && npm test"
   },
   "dependencies": {

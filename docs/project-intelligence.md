@@ -21,16 +21,16 @@ Profile Runtime 已完成：
 
 - 受信任项目的 `.convention-sense/profile.json` 加载、schema 校验、repository-root 隔离和内容 fingerprint；
 - module、selector、scope override、draft/reviewed 强度门控和 effective role 解析；
-- Analyzer `multi-lexical-v5-typescript-vue-profile` 按 base/effective role 过滤 Java、TypeScript 与 Vue 候选；
+- Analyzer `multi-lexical-v6-semantic-peers` 按 base/effective role、Java declaration kind 和 TypeScript/Vue 文件语义后缀筛选与排序候选；
 - Profile fingerprint 与 Pack id/version 引用进入 Snapshot freshness；
 - 当前目标的 Knowledge Capsule 与 Local Snapshot 在统一 token 预算内注入；
 - Profile 缺失、未信任、无效或跨仓库时 fail-open 到既有 Local Evidence；
 - Guard 仍只约束 Discovery，不因 Profile/Pack 风格差异阻断；
 - SnailJob draft fixture：`test/fixtures/profiles/snail-job/.convention-sense/profile.json`。
 
-自动测试覆盖 Profile 正反例、MVC/REST effective role 隔离、Capsule 预算、TypeScript/Vue role 与 workspace 隔离、Extension/Guard/reset 生命周期、外部 Profile trust 隔离和安全日志。最新完整验证为 `npm run verify`，56/56 通过。
+自动测试覆盖 Profile 正反例、MVC/REST effective role 隔离、Capsule 预算、TypeScript/Vue role 与 workspace 隔离、Extension/Guard/reset 生命周期、Practice one-shot 与 `scope-unknown` fallback、外部 Profile trust 隔离和安全日志。最新完整验证为 `npm run verify`，70/70 通过。
 
-当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈、SnailAI 主流程真实生命周期验证、Pack/Adapter 贡献规范和兼容矩阵。SnailJob 还完成了 Job Tag Management CRUD v2 真实业务开发验收；该业务 diff 未提交，供人工审查。SnailAI Admin 原生检查因缺少 `node_modules` 暂列环境阻塞，不扩展为已验证兼容性。下一阶段扩展更多真实仓库、Pi 版本与技术栈矩阵；当前不宣称覆盖其他客户端或未验证技术栈。
+当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈、SnailAI 主流程真实生命周期验证、24 个任务的 Guard 生产准入、Pack/Adapter 贡献规范和兼容矩阵。SnailJob 还完成了 Job Tag Management CRUD v2 真实业务开发验收；该业务 diff 未提交，供人工审查。SnailAI Admin 原生检查因缺少 `node_modules` 暂列环境阻塞，不扩展为已验证兼容性。下一阶段扩展更多真实仓库、Pi 版本与技术栈矩阵；当前不宣称覆盖其他客户端或未验证技术栈。
 
 ## 2. 三层架构
 
@@ -246,6 +246,18 @@ grpc/auto/** + generated header
 - Local Evidence 与 reviewed hard rule 冲突时，保留双方来源并提示，不静默覆盖；
 - 当前 Guard 仍只阻断 Discovery 缺口，不因 Pack/Profile 风格差异阻断；
 - 未来若支持 hard architecture guard，必须独立显式启用。
+
+### 6.1 与 Engineering Practice 的关系
+
+Local Evidence 描述当前代码事实，不代表优秀工程实践。已实现的 Practice Advisory 与 opt-in `auto-once` 复用 Knowledge Capsule 提供的 reviewed/draft Profile `knowledge` 和 `conventions`，并基于目标结构与当前任务 mutation relevance 选择审查问题，但：
+
+- Practice Signal 只选择 review question，不进入知识权威性排序；`scope-unknown` fallback 也不创建 Scope、Snapshot 或 peer evidence；
+- draft Profile 和 Global Pack 中的工程原则继续 advisory；
+- 注释、拆分或设计模式建议不得进入 Convention Guard；
+- P1/P2 继续复用现有 schema；P3 未发现需要项目专属声明式 trigger 的证据，因此不新增 `practices`；
+- Profile 更新仍必须经过 candidate、validate、semantic diff、显式批准和 adopt。
+
+详细设计和实施顺序见 [Engineering Practice](engineering-practice.md)。
 
 ## 7. Knowledge Capsule
 

@@ -71,6 +71,7 @@ test("Observe config validates evidence limits and project analysis fields", () 
       maxContextTokens: 600,
       includeLanguages: ["JAVA"],
       exclude: ["**/out/**"],
+      practiceReview: { mode: "off", maxContextTokens: 280 },
       logging: { explainRanking: false },
     }),
   );
@@ -80,8 +81,25 @@ test("Observe config validates evidence limits and project analysis fields", () 
   assert.equal(loaded.config.maxContextTokens, 600);
   assert.deepEqual(loaded.config.includeLanguages, ["java"]);
   assert.deepEqual(loaded.config.exclude, ["**/out/**"]);
+  assert.equal(loaded.config.practiceReview.mode, "off");
+  assert.equal(loaded.config.practiceReview.maxContextTokens, 280);
   assert.equal(loaded.config.logging.explainRanking, false);
   assert.match(loaded.diagnostics.join("\n"), /Raised maxEvidenceFiles/);
+});
+
+test("invalid Practice config falls back to bounded suggest mode", () => {
+  const cwd = tempProject();
+  mkdirSync(join(cwd, ".pi"));
+  writeFileSync(
+    join(cwd, ".pi", "convention-sense.json"),
+    JSON.stringify({ practiceReview: { mode: "always", maxContextTokens: 5000 } }),
+  );
+
+  const loaded = loadSpikeConfig(cwd, true);
+  assert.equal(loaded.config.practiceReview.mode, "suggest");
+  assert.equal(loaded.config.practiceReview.maxContextTokens, 400);
+  assert.match(loaded.diagnostics.join("\n"), /expected off, suggest, or auto-once/);
+  assert.match(loaded.diagnostics.join("\n"), /maxContextTokens/);
 });
 
 test("a pending sibling read never satisfies guard; only a successful result does", () => {

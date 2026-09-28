@@ -1,17 +1,17 @@
 # 阶段 2：V1 Guard 决策与验证记录
 
-> 状态：实验实现、SnailJob/SnailAI 主流程验证完成；生产准入仍待补充任务矩阵
+> 状态：Stage 2 生产准入门槛通过；可用于受控项目的 experimental opt-in
 > 默认运行模式：`observe`
-> Guard 发布状态：实验性、必须显式启用
+> Guard 发布状态：实验性、必须显式启用；准入通过不代表默认开启
 
 ## 1. 启动边界
 
-阶段 2 可以实现和进行合成验证，但在真实企业 Java 项目完成 20～30 个任务评估之前：
+阶段 2 已完成真实 Pi 生命周期和 24 个 SnailJob/SnailAI 任务的生产准入评估。结果达到 Top-K、High Observation 和潜在误拦截门槛，详见[永久准入报告](evaluations/guard-production-readiness-results.md)。准入后仍保持以下边界：
 
 - 不把 `guard` 设为默认模式；
-- 不声明 Guard 已达到生产发布门槛；
-- 不根据 Fixture 结果虚构 Top-K、Observation 或误拦截指标；
-- 真实项目到位后继续使用同一日志 schema 做准入评估。
+- 只在受控项目中显式启用 experimental Guard；
+- 不根据 Fixture 结果扩大兼容声明；
+- 继续使用同一日志 schema 监测候选质量和误拦截风险。
 
 ## 2. Guard 判定决策
 
@@ -122,7 +122,7 @@ Session resume、Session switch 和 `/tree` 后清空注入记录；下一轮 Co
 
 ## 7. 验证状态
 
-> 未勾选项均为本轮明确未完成的准入或交互验证，不是遗漏：Guard 继续保持 `experimental opt-in`，不默认阻断。
+> 既定准入项已完成。Guard 继续保持 `experimental opt-in`，默认 Observe，不因准入通过而扩大阻断边界。
 
 - [x] formal Guard reason code 单元测试；
 - [x] valid/weak/no-peer/new-file/prospective 测试；
@@ -135,10 +135,10 @@ Session resume、Session switch 和 `/tree` 后清空注入记录；下一轮 Co
 - [x] 真实 Pi 中 prospective write block → Context → retry allow；
 - [x] 真实 Pi 中 Shell 后置缺口注入；
 - [x] bypass Extension 集成测试；
-- [ ] 真实 Pi TUI 手动 `/convention-bypass` 交互验证；
-- [ ] HEAD 变化的真实 Pi Shell 验证；
-- [ ] 企业项目 20～30 个 Observe/Shadow Guard 任务；
-- [ ] pi-lens 同时安装后的真实任务联调。
+- [x] 真实 Pi TUI 手动 `/convention-bypass` 精确路径、一次消费、Session/Branch/reset 验证；
+- [x] HEAD 变化的真实 Pi Shell 验证；
+- [x] SnailJob/SnailAI 24 个 Observe/Shadow Guard 任务；
+- [x] pi-lens `4.2.1` 同时安装后的真实任务联调。
 
 ## 8. 实施产物
 
@@ -156,7 +156,7 @@ Session resume、Session switch 和 `/tree` 后清空注入记录；下一轮 Co
 
 - prospective Java Snapshot；
 - Snapshot schema 增加 `targetKind`；
-- Analyzer 版本升级为 `java-lexical-v2-guard`；
+- Analyzer 版本经后续候选修复升级为 `multi-lexical-v6-semantic-peers`；
 - checkpoint 升级到 v3，并兼容 v1/v2；
 - Mutation/Read Ledger 支持显式第三方工具映射；
 - `/convention-bypass` 和 `/convention-audit`；
@@ -168,8 +168,8 @@ Session resume、Session switch 和 `/tree` 后清空注入记录；下一轮 Co
 | 验证 | 结果 |
 | --- | --- |
 | `npm run verify` / TypeScript check | 通过 |
-| 自动测试 | 34/34 通过 |
-| `npm pack --dry-run` | 通过，34 个发布文件，无 test/dist/log 泄漏 |
+| 自动测试 | 59/59 通过 |
+| `npm pack --dry-run` | 通过，69 个发布文件，无 test/dist/log/临时证据泄漏 |
 | Pi 显式 Extension / 项目级安装无模型加载 | 通过 |
 | Guard valid/weak/no-peer/low-scope/fail-open | 通过 |
 | prospective Snapshot | 通过 |
@@ -219,12 +219,8 @@ truncated=false
 
 ## 11. 当前完成度
 
-阶段 2 的**实验实现**以及 SnailJob/SnailAI 的真实主流程验证已经完成，可继续保持 Observe 或在 Fixture/专用 Branch 显式启用 Guard。阶段 2 的**生产准入**尚未完成：真实 TUI 手动命令、HEAD 变化 Shell 场景、20～30 个 Observe/Shadow Guard 任务和 pi-lens 同时安装联调仍是待办门槛。这些未完成项不是本轮产品失败；它们决定 Guard 是否可以扩大启用范围。
+阶段 2 的**生产准入收尾已完成**。24 个真实任务得到 Top-K 72/77（93.5%）、High Observation 17/17（100%）和潜在误拦截 1/24（4.2%）；24/24 均在完成 Discovery 后放行，7/7 weak/no-peer/insufficient-peer 场景 fail-open。真实 TUI bypass、Session/Branch/reset、pi-lens 共存和 HEAD 变化 Shell 审计全部通过。
 
-企业项目到位后优先执行：
+准入决定不是默认启用决定：Guard 仍为 experimental opt-in，默认 Observe，并继续只约束 Discovery。已知的 SnailJob UI `WebController` 宽候选风险保留在观测指标中。完整任务、缺陷修复、生命周期证据和限制见[Stage 2 Guard 生产准入结果](evaluations/guard-production-readiness-results.md)。
 
-1. Observe/Shadow Guard 跑 20～30 个真实任务；
-2. 人工标注 Top-K 候选与高置信 Observation；
-3. 统计 `wouldBlock` 中真实误拦截；
-4. 验证多模块、遗留 mixed style、generated、dirty tree 和 pi-lens 组合；
-5. 达到 80% / 90% / 10% 门槛后再讨论 Guard 默认策略。
+新的 [Engineering Practice](engineering-practice.md) 主线已完成 P1 Advisory MVP，且未改变 Guard 的 Discovery-only 语义；注释、拆分和设计模式建议仍不得成为本阶段 reason code。

@@ -1,6 +1,6 @@
 import type { ResolvedProjectContext } from "../profile/types.js";
 
-export const ANALYZER_VERSION = "multi-lexical-v5-typescript-vue-profile";
+export const ANALYZER_VERSION = "multi-lexical-v6-semantic-peers";
 
 export type ScopeConfidence = "high" | "medium" | "low";
 export type ObservationConfidence = "high" | "medium" | "low";
@@ -33,6 +33,7 @@ export type WebRole =
 
 export type ObserveLanguage = "java" | "typescript" | "vue";
 export type ObserveRole = JavaRole | WebRole;
+export type JavaDeclarationKind = "class" | "interface" | "enum" | "record";
 
 export interface ConventionScope {
   language: ObserveLanguage;
@@ -66,6 +67,7 @@ export interface SourceFileFacts {
 
 export interface JavaFileFacts extends SourceFileFacts {
   packageName?: string;
+  declarationKind?: JavaDeclarationKind;
   role: JavaRole;
 }
 
@@ -83,6 +85,7 @@ export interface CandidateScoreBreakdown {
   samePackageOrSibling: number;
   annotationSimilarity: number;
   interfaceOrSuperclassSimilarity: number;
+  nameSimilarity?: number;
   importJaccard: number;
   recentlyMaintained: number;
   sizeSimilarity: number;
@@ -184,6 +187,10 @@ export interface ObserveConfig {
     enabled: boolean;
     notify: boolean;
     maxChangedFiles: number;
+  };
+  practiceReview: {
+    mode: "off" | "suggest" | "auto-once";
+    maxContextTokens: number;
   };
   toolMappings: ToolMappingConfig[];
   logging: {
