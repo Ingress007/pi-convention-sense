@@ -360,7 +360,7 @@ P3 已形成首个基线：18/18 修改正确，suggest question 人工适用 5/
 - Guard block → read → Context → retry allow 已在真实 Pi 验证；
 - prospective file、weak/no-peer fail-open、Branch checkpoint 和 Shell dirty baseline 已验证；
 - SnailJob/SnailAI 主流程与 SnailJob CRUD 已完成真实验收；
-- 自动测试基线为 70/70。
+- 自动测试基线见 [README](../README.md)（`npm run verify` 全部通过）。
 
 ### Guard 前置条件已完成
 

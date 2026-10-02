@@ -1,9 +1,10 @@
 # pi-convention-sense V1 技术设计方案
 
-> 文档状态：方案草案（Draft）
-> 版本：V1.2 Draft
+> 文档状态：现行设计（已实现，随实现维护；与代码不一致时以代码和测试为准）
+> 版本：V1.2
 > 源文档标注更新日期：2026-09-17
 > 当前架构融合日期：2026-09-23
+> 最近一次与实现对齐：2026-10-02（运行时状态、freshness、checkpoint、配置校验、稳健性与测试组成）
 > 对应需求文档：[requirements.md](./requirements.md)
 > Project Intelligence 深入设计：[project-intelligence.md](./project-intelligence.md)
 > Engineering Practice 深入设计：[engineering-practice.md](./engineering-practice.md)
@@ -45,7 +46,7 @@ V1.2 Engineering Practice Advisory MVP 与 opt-in `auto-once` 已实现。它不
 | 任务结束检查 | `agent_settled` | 用于最终通知型后置审计 |
 | 结束前一次性自审 | `agent_before_settle` | 只有高价值 Practice Signal 时才允许当前 Agent 继续一次，必须防循环 |
 | Discovery/诊断能力 | `registerTool()` | 可注册自定义工具 |
-| 扩展状态持久化 | `appendEntry()` / SessionManager | V1 先用内存，V1.1 再持久化 |
+| 扩展状态持久化 | `appendEntry()` / SessionManager | read ledger 以 v3 checkpoint 持久化（见 §11.3）；Snapshot 只在内存，恢复后按已读取文件重建 |
 
 ### 2.2 必须遵守的边界
 
@@ -276,16 +277,23 @@ interface ConventionSnapshot {
 ### 5.4 运行时状态
 
 ```typescript
-interface RuntimeState {
-  branchId?: string;
-  reads: Map<string, ReadRecord>;
+interface SpikeRuntimeState {            // src/runtime/types.ts（`Spike` 是历史命名）
+  successfulReads: PathSet;              // 成功读取的账本，按 pathKey 判等，保留首次拼写
+  recentReads: ReadRecord[];             // 最近读取，用于恢复后重建 Snapshot
+  pendingReads: Map<string, PendingRead>; // 尚未返回的读取，不满足 Guard
   mutations: MutationRecord[];
-  snapshots: Map<ScopeKey, ConventionSnapshot>;
-  pendingTargets: Set<string>;
+  shellRiskCount: number;
+  guardCounters: { allow: number; wouldBlock: number; block: number };
+  turnIndex: number;
+  contextInjectionCount: number;
+  bypassCount: number;
+  postChangeAuditCount: number;
+  postChangeGapCount: number;
+  restoredFromCheckpoint: boolean;
 }
 ```
 
-实际实现中 `snapshots` 的键应包含仓库和 Branch，或由 Branch 级 RuntimeState 隔离。
+状态按 Branch 隔离：`session_start` 与 `session_tree` 都从当前 Branch 重建（`restoreStateFromBranch`）。Snapshot 不在这个状态里，而在 `SnapshotCache`（按目标 `pathKey` 索引，Scope 隔离由候选与 fingerprint 保证，随 Branch 切换清空）。
 
 ## 6. Scope Detector 设计
 
@@ -381,10 +389,12 @@ Observe 日志保存评分解释，便于人工评估候选认可率。
 
 ### 7.4 性能策略
 
-- 使用仓库文件索引，避免每轮递归扫描；
+- 使用仓库文件索引（只存路径），避免每轮递归扫描：编辑已存在的文件不使索引失效，只有创建/删除源文件才重建（`noteFileChanged`，符号链接和目录不算）；索引被截断（≥ 2 万文件）时无法判断新增，保持不重建；因为 `git checkout/pull/stash`、代码生成不会被识别为风险命令，索引超过 3 分钟或 `.git/HEAD` 变化时也会重扫；
+- glob 使用预编译缓存（`src/runtime/glob.ts`），分类用仓库相对路径的字面前缀快路径；
 - Scope/候选结果按目录状态缓存；
 - 仅在目标 Scope 首次出现或 freshness 失效后重算；
-- 昂贵信号（import、annotation、继承）只对初筛后的有限候选计算。
+- 昂贵信号（import、annotation、继承）只对初筛后的有限候选计算；
+- 单个源码文件超过 1 MiB 不分析；所有词法规则对任意不超过该上限的输入线性或有界（见 §15）。2 万文件级合成仓库（`scripts/benchmark-analysis.mjs`）的典型值：冷分析约 1.4–1.6 s，重复分析/编辑后重分析约 0.35–0.45 s，freshness 检查约 1 ms。
 
 ## 8. Evidence Builder 设计
 
@@ -491,7 +501,7 @@ Do not refactor unrelated code solely to match these observations.
 
 ### 9.3 Token 裁剪
 
-默认 `maxContextTokens = 1200`，裁剪顺序：
+默认 `maxContextTokens = 1200`，用 `estimateTokens` 估算（CJK 字符约 1 token/字，其余约 4 字符/token），裁剪顺序：
 
 1. 删除 Low Observation；
 2. 删除或压缩 Mixed 细节，但保留“存在混合”的提醒；
@@ -499,7 +509,7 @@ Do not refactor unrelated code solely to match these observations.
 4. 压缩说明性文本；
 5. 保留优先级声明、Target、High/Medium Observation 和关键反例。
 
-不得通过硬截断破坏 XML/结构或关键指令。
+不得通过硬截断破坏 XML/结构或关键指令。即使最小的闭合形式也放不进预算时，返回该闭合形式和它的真实估算值，由调用方跳过，而不是截断出未闭合的标签。来自仓库的文本（路径、模块名、Profile 文本）一律经过 `escapeXml`。
 
 ## 10. Convention Guard 设计
 
@@ -543,6 +553,10 @@ reasonCode 示例：
 - `SNAPSHOT_NOT_INJECTED`；
 - `NO_PEERS_AVAILABLE`；
 - `BYPASS_GRANTED`。
+
+### 10.2.1 “已注入”的判定
+
+`requireRecentContext` 要求 valid Snapshot 已经出现在近期的模型 Context 里。“同一份 Snapshot”按**证据身份**判断（`snapshotEvidenceKey`）：Scope、置信度与状态、每个 peer 的路径和内容哈希、Observation 摘要和配置 fingerprint；**不**包含目标文件自己的内容，也不包含 Snapshot 对象的创建时间。因此编辑目标文件会重建 Snapshot，但模型看到的证据没变，同一轮里紧接着的下一次编辑不会被 `SNAPSHOT_NOT_INJECTED` 阻断；任何 peer 内容、Observation、Scope 或配置变化都是新证据，需要下一次 Context 重新注入后才放行。
 
 ### 10.3 新文件
 
@@ -604,43 +618,41 @@ Signal 只产生审查问题，不直接指定模式。简单函数、数据驱�
 
 ## 11. Session、Branch、缓存与 Freshness
 
-### 11.1 V1 状态策略
+### 11.1 状态策略
 
-- Extension 启动或 Session start 时初始化内存状态；
-- Branch/fork/change 事件发生时清空重建，或切换到 Branch 独立状态；
+- `session_start` 与 `session_tree`（`/tree`、Branch 切换）都从当前 Branch 的最新有效 checkpoint 重建运行状态，并清空 Snapshot、Guard bypass 和 post-change 状态；
 - 不跨仓库复用；
 - 不保存长期惯例；
-- Snapshot 以 Scope + repository + Branch 为隔离边界。
+- Snapshot 只在内存，不进入 checkpoint；恢复后由下一次 Context 对已读取的目标重新分析。
 
 ### 11.2 Freshness 校验
 
-注入或 Guard 前校验：
+注入或 Guard 前校验（`checkSnapshotFreshness`，原因写入日志）：
 
-- 目标文件和 Evidence 文件是否仍存在；
-- `mtime` 是否变化；
-- 可选 content hash 是否变化；
-- Branch 状态是否一致；
-- 配置 fingerprint 是否一致；
-- Profile fingerprint 是否一致；
-- active Pack id/version 是否一致；
-- 分析器版本是否一致。
+- 分析器版本是否一致（`analyzer-version-changed`）；
+- 配置 fingerprint 是否一致，其中包含 Profile fingerprint 和 active Pack id/version（`config-changed`）；
+- 目标文件是否仍存在，是否从 prospective 变为已创建（`target-missing`、`prospective-target-created`）；
+- 目标与每个 Evidence 文件的 `mtime`、`size` 是否变化（`target-changed`、`evidence-missing:<path>`、`evidence-changed:<path>`）。
 
-任一关键条件变化后：
+文件元数据采用 git 的 "racy clean" 规则（`src/runtime/racy-clean.ts`，只此一份）：`mtime` 与 `size` 都没变、且文件在 Snapshot 创建时已经足够旧（> 5 s）才被信任；否则（包括 `mtime` 在未来）回退到 SHA-256 内容比较。因此未改动的旧文件每次 freshness 检查只做一次 `stat`，不重读、不哈希。
 
-1. 标记 Snapshot 为 `stale`；
-2. 不再注入或用于 Guard 放行；
-3. 按需重新 Discovery；
-4. 记录失效原因。
+任一条件变化后：
 
-### 11.3 V1.1 持久化
+1. 标记 Snapshot 为 `stale` 并记录原因；
+2. `stale` 是粘性的：在该目标被重新分析之前，`getFresh` 不再返回它（即使文件随后又与记录一致），避免带着 `stale` 状态的快照被当作新鲜证据；
+3. 不再注入或用于 Guard 放行；
+4. 下一次 Context 或 Guard preflight 按需重新分析。
 
-可通过：
+受控 mutation（edit/write 的成功结果）会立即使涉及该路径的 Snapshot 失效（`invalidatePath`），并通知文件索引。
 
-```typescript
-appendEntry("convention-snapshot", snapshot)
-```
+### 11.3 持久化
 
-保存扩展数据。此数据不直接进入 LLM Context；恢复时必须根据当前 Session Branch 重建或筛选状态。
+read ledger 通过 `pi.appendEntry("pi-convention-sense-spike-state", checkpoint)` 持久化（类型名是历史兼容契约，不能改）。checkpoint 是整份账本快照，格式为 v3，并兼容 v1/v2：
+
+- **内容**：`successfulReads`（最多最近 300 条）、`recentReads`（最近 100 条）、`mutations`（最近 100 条）、Shell 风险计数、Guard 计数、bypass/后置审计计数；不含 Snapshot、源码或 prompt；
+- **写入时机**：`agent_settled` 与 `session_shutdown`，且只在账本有变化时写（不是每个 `tool_result`）；`/convention-reset confirm` 追加一份空 checkpoint。异常退出最多丢失最近一次 run 的账本；
+- **恢复**：取当前 Branch 上**最新的有效** checkpoint。校验要求各计数为非负安全整数、读取与修改记录结构正确；校验失败的 checkpoint 被整体忽略，回退到更早的有效 checkpoint；恢复时同样应用上述条数上限，避免被损坏或过大的 Session 文件拖垮；
+- 此数据不进入 LLM Context。
 
 ## 12. 配置设计
 
@@ -660,7 +672,11 @@ appendEntry("convention-snapshot", snapshot)
     "**/build/**",
     "**/target/**",
     "**/vendor/**",
-    "**/node_modules/**"
+    "**/node_modules/**",
+    "**/.nuxt/**",
+    "**/.next/**",
+    "**/.output/**",
+    "**/coverage/**"
   ],
   "injectContext": true,
   "persistSessionState": true,
@@ -693,12 +709,17 @@ appendEntry("convention-snapshot", snapshot)
 
 Project Profile 固定使用启动仓库下的 `.convention-sense/profile.json`，不通过运行配置指向任意外部路径。Profile 缺失、无效、未信任或目标位于外部仓库时 fail-open 到 base role 与 Local Evidence。Global Pack 只有被受信 Profile 显式启用后才生效，并且始终 advisory。
 
-配置加载建议：
+配置加载（`loadSpikeConfig`，字段、默认值与取值范围的完整列表见 [README 的配置参考](../README.md#完整配置参考)）：
 
-- 提供默认值和 schema 校验；
-- 非法配置输出诊断并回退安全默认值；
-- 配置变化使相关 Snapshot 失效；
-- V1 默认 `mode = observe`、Guard 关闭、fail-open。
+- 只在项目受信任时读取；未受信任时只给出“配置被忽略”的诊断；
+- 逐字段校验：整数字段有范围，枚举字段有白名单，数组字段要求非空字符串元素；不合法的字段输出诊断并回退该字段的默认值，不影响其他字段；文件不是合法 JSON 或根不是对象时整份回退默认值；
+- `includeLanguages` 只接受 `java`/`typescript`/`vue`（不区分大小写），未知语言给出诊断并丢弃，空列表给出“不分析任何文件”的提示；
+- `exclude` 与 `guard.pathExceptions` 里的 glob 必须通过 `isSupportedGlob`（≤ 512 字符，单段 `*` 连续段 ≤ 5、extglob 组 ≤ 3），否则给出 `unsupported glob` 诊断并丢弃；
+- `logPath` 必须位于 `<configDir>/convention-sense/` 内，且日志文件及其上的目录不得是符号链接或 junction，否则回退默认路径；默认路径本身不安全时关闭日志；
+- `toolMappings` 的路径字段只允许由合法标识符组成的点分路径，且禁止 `__proto__`/`prototype`/`constructor`；内置工具不可覆盖，工具名不可重复；
+- 配置变化使相关 Snapshot 失效（配置 fingerprint）；
+- 默认 `mode = observe`、Guard 关闭、fail-open；
+- `test/fuzz-state.test.ts` 对任意形状的配置文件断言上述不变量，新增配置项时必须同步其生成器。
 
 Engineering Practice 使用独立配置：`practiceReview.mode` 接受 `off | suggest | auto-once`，默认 `suggest`；`practiceReview.maxContextTokens` 默认为 400，范围为 120～1200。suggest 仍受全局 `maxContextTokens` 限制；auto-once 复用该上限约束 review message。一次性语义由 Runtime 固定保证，不增加可配置 `maxReviewsPerTask`。
 
@@ -710,52 +731,58 @@ Engineering Practice 使用独立配置：`practiceReview.mode` 接受 `off | su
 pi-convention-sense/
 ├── package.json
 ├── extensions/
-│   └── index.ts                  # Pi 生命周期编排
+│   └── index.ts                      # Pi 生命周期编排与命令
 ├── src/
-│   ├── observe/
-│   │   ├── analyzer.ts
-│   │   ├── candidate-ranker.ts
+│   ├── observe/                      # repository、Scope、候选、Evidence、Snapshot
+│   │   ├── analyzer.ts               # ObserveAnalyzer：串起整条分析链
+│   │   ├── active-targets.ts         # 活跃目标、已覆盖目标和 Practice fallback 目标的选择
+│   │   ├── source-selection.ts       # 启用的语言与 production 判定
+│   │   ├── snapshot-log.ts           # Snapshot 创建/跳过的日志载荷
+│   │   ├── java-analyzer.ts          # Java 词法事实
+│   │   ├── typescript-analyzer.ts    # TypeScript/Vue 词法事实
+│   │   ├── scope-detector.ts         # Java Scope
+│   │   ├── typescript-scope-detector.ts
+│   │   ├── candidate-ranker.ts       # Java 候选
+│   │   ├── typescript-candidate-ranker.ts
 │   │   ├── evidence-builder.ts
-│   │   ├── java-analyzer.ts
-│   │   ├── observe-decision.ts
-│   │   ├── repository-index.ts
-│   │   ├── scope-detector.ts
-│   │   ├── snapshot-cache.ts
-│   │   ├── snapshot-formatter.ts
+│   │   ├── repository-index.ts       # 只存路径的文件索引
+│   │   ├── repository-root.ts        # 目标所属 Git/工程根
+│   │   ├── repository-path.ts        # 仓库相对路径分类
+│   │   ├── snapshot-cache.ts         # freshness 与 stale
+│   │   ├── snapshot-formatter.ts     # <local-convention> 与 estimateTokens
+│   │   ├── limits.ts                 # 分析文件大小上限
 │   │   └── types.ts
 │   ├── guard/
-│   │   ├── convention-guard.ts
-│   │   ├── git-auditor.ts
-│   │   ├── post-change-audit.ts
-│   │   ├── runtime.ts
-│   │   └── tool-mapping.ts
-│   ├── profile/                  # Pack、Profile、Selector、Resolver 与 Capsule
-│   ├── practice/                 # Signal analyzer、Capsule formatter 与 one-shot Review Runtime
-│   └── runtime/                  # 配置、Context、状态、日志和 Pi 生命周期基础设施
-│       ├── config.ts
-│       ├── context.ts
-│       ├── guard.ts
-│       ├── logger.ts
-│       ├── paths.ts
-│       ├── state.ts
-│       ├── status.ts
+│   │   ├── convention-guard.ts       # 纯函数判定表
+│   │   ├── runtime.ts                # bypass 与注入记录
+│   │   ├── git-auditor.ts            # Shell 前后 Git 状态
+│   │   ├── post-change-audit.ts      # 后置缺口账本与变更文件选择
+│   │   ├── tool-mapping.ts
+│   │   └── tool-summary.ts           # 可记录的工具调用摘要（路径、命令长度与风险标签）
+│   ├── profile/                      # Pack、Profile、Selector、Resolver 与 Knowledge Capsule
+│   ├── practice/                     # Signal analyzer、Capsule formatter 与 one-shot Review Runtime
+│   └── runtime/                      # 配置、Context、状态、日志与基础设施
+│       ├── config.ts                 # 配置加载与校验
+│       ├── command-text.ts           # /convention-* 命令的文本、补全与最近 Guard 判定
+│       ├── state.ts                  # 运行状态与 checkpoint v1/v2/v3
+│       ├── context.ts                # 动态 Context 拼装与预算
+│       ├── logger.ts / log-safety.ts # NDJSON 日志与符号链接防护
+│       ├── handler-errors.ts         # handler 异常的无消息描述与限流
+│       ├── path-key.ts               # pathKey/PathSet，大小写折叠与扩展路径前缀
+│       ├── paths.ts                  # 工具路径、Shell 风险分类
+│       ├── glob.ts                   # 预编译 glob 与 isSupportedGlob
+│       ├── racy-clean.ts             # git 的 racy-clean 判定
+│       ├── xml.ts                    # escapeXml
+│       ├── status.ts                 # /convention-status 文本与 web 项目提示
 │       └── types.ts
-├── examples/
-│   ├── config/
-│   │   ├── java-observe.json
-│   │   ├── java-guard.json
-│   │   └── typescript-vue-observe.json
-│   └── legacy/
-│       └── stage-0-spike.json
+├── skills/project-profiler/          # Profile init/adopt/refresh/diff 工作流与独立 helper
+├── scripts/                          # 真实仓库评估与合成仓库基准
+├── examples/config/                  # java-observe / java-guard / typescript-vue-observe
 └── test/
-    ├── fixtures/
-    ├── core.test.ts
-    ├── observe.test.ts
-    ├── guard.test.ts
-    ├── practice.test.ts
-    └── extension.test.ts
+    ├── fixtures/                     # java-maven / java-gradle / java-monolith / typescript-vue / profiles
+    ├── support/                      # fake-pi（手写假 API）、pi-session（真实 Pi 离线会话）、fuzz
+    └── *.test.ts                     # 见 §17.5
 ```
-
 正式 Guard 已作为显式 opt-in 实现；辅助 Skill 仍保留给后续深度审计阶段，不进入正常编码链路。
 
 ## 14. 与 Pi 生态组件的集成
@@ -775,7 +802,12 @@ pi-convention-sense/
 | 无足够候选 | 生成 weak Snapshot，明确“证据不足” |
 | Scope 冲突 | 选择保守 Scope 或标记混合，降低置信度 |
 | 分析器异常 | 记录错误，默认 fail-open，不中断 Pi 主流程 |
+| handler 内部异常 | 每个生命周期 handler 自己捕获并 fail-open；Pi 不捕获 `tool_call` handler 的异常，抛出会阻断用户的工具。只记录 `handler_error`（事件名、错误名、错误码、栈顶定位帧，不含消息，按第 1、10、100…次限流） |
 | 超大仓库 | 文件索引、目录限制、缓存，禁止每轮全仓遍历 |
+| 超大/异常源码文件 | 超过 1 MiB 不分析（目标 fail-open 为 `analysis-error`，peer 跳过）；词法规则对任意输入线性或有界，禁止对每个锚点都可能扫到文件末尾的无界正则；注释/字符串屏蔽按 UTF-16 下标，行结束符按 LF/CR/CRLF |
+| Git 过慢或异常 | 一次抓取共享 3 s 总时限，超时降级为后置审计 unavailable；状态条目先排序截断再哈希 |
+| 损坏的配置/checkpoint/Profile | 非法配置字段回退默认值并给出诊断；校验失败的 checkpoint 回退到更早的有效 checkpoint；无效 Profile 为 `invalid` 并 fail-open |
+| 复杂或超长 glob | `isSupportedGlob` 拒绝的模式视为永不匹配（minimatch 对其耗时指数增长或抛错），配置里的此类模式给出诊断 |
 | 并行工具 | 成功 `tool_result` 返回后才写入 Read Ledger |
 | 文件删除/重命名 | Snapshot stale，触发重新发现 |
 | Shell 修改 | Mutation Ledger/Git diff 标记 `post-check required` |
@@ -797,7 +829,9 @@ Observe 模式至少记录：
 - Shell 后置检测和审计缺口；
 - Practice Signal id、confidence、触发计数、fallback count、预算、review generation 和耗时。
 
-日志不得无控制地复制完整源码。Practice 日志同样禁止保存源码 diff、完整 prompt、自审正文或完整命令。
+- 被吞掉的 handler 异常（`handler_error`，不含错误消息）。
+
+日志不得无控制地复制完整源码。Practice 日志同样禁止保存源码 diff、完整 prompt、自审正文或完整命令。`test/lifecycle-fuzz.test.ts` 在随机事件序列下断言日志不含 prompt、命令、文件内容和工具输出。
 
 ## 17. 测试方案
 
@@ -846,6 +880,20 @@ Observe 模式至少记录：
 - 首次分析增加的交互延迟可接受；
 - 每轮不得全量扫描仓库；
 - Branch 串用 Snapshot 数量为 0。
+
+### 17.5 当前自动测试组成
+
+`npm test` 构建后运行 `dist/test/*.test.js`（glob，新增文件无需登记）：
+
+| 类别 | 文件 | 要点 |
+|---|---|---|
+| 单元/行为 | `core`、`observe`、`guard`、`profile`、`practice`、`convention-guard`、`profile-resolver`、`snapshot-cache`、`snapshot-formatter`、`practice-capsule`、`profile-capsule`、`typescript-scope`、`git-auditor`、`status`、`path-key`、`line-endings`、`profile-tools-cli` | `convention-guard` 对 16,384 种输入组合穷举，断言 Guard 只阻断 Discovery 缺口；`git-auditor` 用真实 Git 仓库；`path-key` 的 Windows 专属用例在非 win32 跳过 |
+| 手写假 Pi API | `extension`（`test/support/fake-pi.ts`） | 快，但不等于真实 Pi 语义；`afterEach` 断言 happy path 没有被吞掉的 `handler_error` |
+| 真实 Pi（离线） | `pi-integration`、`pi-lifecycle`（`test/support/pi-session.ts`） | Pi 自己的 loader、agent loop、工具 runner、Extension runner，由 pi-ai 的 faux 脚本化模型驱动：manifest 加载、Guard 阻断/放行、并行工具时序、fail-open、checkpoint 与分支导航、auto-once、`/convention-*` 命令、bypass、compaction、reload |
+| 稳健性 | `robustness`、`fuzz-state`、`lifecycle-fuzz` | 对抗输入给每个分析器 1 s 预算；配置与 checkpoint 种子化 fuzz；随机/乱序/残缺事件序列加随机文件系统变化，断言 fail-open、Guard 契约、checkpoint 可恢复和日志隐私，并用活动计数器防止空转。失败信息带 seed，`FUZZ_SCALE=N` 放大循环 |
+| 一致性 | `profile-differential`、`docs` | 运行时 Profile loader 与 Skill helper 对任何 Profile 判断一致；文档的链接、仓库路径引用和基线数字一致 |
+
+保护关键行为的测试都做过变异验证（临时破坏 `dist/` 里的被测行为，确认测试失败）。覆盖率门槛为行 88% / 分支 78% / 函数 88%（`npm run coverage`）。
 
 ## 18. 实施计划
 
@@ -952,7 +1000,9 @@ P3 真实质量评估也已完成：18/18 mode run 正确，简单任务干扰 0
 - 注释建议聚焦 why，拆分聚焦责任边界，设计模式必须有真实变化轴；
 - Practice 自审只使用当前 Agent，默认不自动继续，opt-in auto-once 每任务最多一次；
 - Practice Review Runtime 只保存当前 task generation、mutation relevance 和 requested bit，不进入 checkpoint；
-- 受控简单修改先做 relevance 过滤，Shell 复用既有 Git 后置审计，不建立平行 diff runtime。
+- 受控简单修改先做 relevance 过滤，Shell 复用既有 Git 后置审计，不建立平行 diff runtime；
+- 不根据 `ctx.getContextUsage()` 动态降级或跳过注入：每次请求的注入量有上限（Snapshot 默认 ≤ 1200 tokens，Practice ≤ 400），上下文压缩由 Pi 自己负责；而跳过注入会让 Guard 的 `SNAPSHOT_NOT_INJECTED` 变成无法完成的缺口，必须再引入一个 fail-open reason。真实使用中出现上下文挤压问题的证据之前不做；
+- 持久化只保存 read ledger，不保存 Snapshot；compaction 与 reload 后账本由内存或 checkpoint 保持，Snapshot 按需重建（`test/pi-lifecycle.test.ts` 在真实 Pi 下验证）。
 
 ## 20. 技术待确认项与 Spike 结论
 
@@ -1025,7 +1075,7 @@ P3 真实质量评估也已完成：18/18 mode run 正确，简单任务干扰 0
 - 稳定指导改为由 `before_agent_start` 更新 normalized `systemPromptOptions.sections["pi-convention-sense"]`，不再返回完整 `systemPrompt`；
 - 动态 Snapshot 与 Knowledge Capsule 继续通过非持久化 custom `context` message 注入；
 - 独立 `--no-session` Pi 0.87.1 子进程已验证 `session_start → before_agent_start → context → agent_settled → session_shutdown`；
-- 0.87.1 下 strict TypeScript、clean build 和 70 个自动测试全部通过。
+- 0.87.1 下 strict TypeScript、clean build 和全部自动测试通过（数量见 [README](../README.md)）；另有离线真实 Pi 生命周期测试，覆盖命令分发、compaction 和 reload。
 
 详见 [compatibility.md](./compatibility.md)。
 

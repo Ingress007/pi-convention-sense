@@ -28,7 +28,7 @@ Profile Runtime 已完成：
 - Guard 仍只约束 Discovery，不因 Profile/Pack 风格差异阻断；
 - SnailJob draft fixture：`test/fixtures/profiles/snail-job/.convention-sense/profile.json`。
 
-自动测试覆盖 Profile 正反例、MVC/REST effective role 隔离、Capsule 预算、TypeScript/Vue role 与 workspace 隔离、Extension/Guard/reset 生命周期、Practice one-shot 与 `scope-unknown` fallback、外部 Profile trust 隔离和安全日志。最新完整验证为 `npm run verify`，70/70 通过。
+自动测试覆盖 Profile 正反例、MVC/REST effective role 隔离、Capsule 预算、TypeScript/Vue role 与 workspace 隔离、Extension/Guard/reset 生命周期、Practice one-shot 与 `scope-unknown` fallback、外部 Profile trust 隔离和安全日志。最新完整验证为 `npm run verify`，306/306 通过。
 
 当前边界：已提供 `java-spring@1.0.0` 与 `typescript-vue@1.0.0` 两个最小内置 advisory Pack，并完成 SnailJob 全栈、SnailAI 主流程真实生命周期验证、24 个任务的 Guard 生产准入、Pack/Adapter 贡献规范和兼容矩阵。SnailJob 还完成了 Job Tag Management CRUD v2 真实业务开发验收；该业务 diff 未提交，供人工审查。SnailAI Admin 原生检查因缺少 `node_modules` 暂列环境阻塞，不扩展为已验证兼容性。下一阶段扩展更多真实仓库、Pi 版本与技术栈矩阵；当前不宣称覆盖其他客户端或未验证技术栈。
 
@@ -351,7 +351,9 @@ Profile fingerprint 至少包含：
 - Extension 实现代码变更需要重启 Pi；
 - 重新解析 Scope 和候选；
 - 不跨 Branch 或 repository 复用旧 Resolution；
-- schema 无效时输出诊断并 fail-open 到现有 Local Evidence。
+- schema 无效时输出诊断并 fail-open 到现有 Local Evidence；
+- Profile 加载按 `mtime` + `size` 缓存（与 Snapshot freshness 同一条 racy-clean 规则：文件在缓存时足够旧才信任元数据，否则重读内容），信任判断先于缓存，所以修改 Profile 仍立即生效；
+- 被标记为 stale 的 Snapshot 在目标被重新分析之前不会再被当作新鲜证据（即使 fingerprint 又变回去）。
 
 ## 10. SnailJob 垂直主流程
 

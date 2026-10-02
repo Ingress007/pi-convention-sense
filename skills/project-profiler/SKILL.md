@@ -1,7 +1,7 @@
 ---
 name: project-profiler
 description: Create, adopt, refresh, validate, and semantically diff pi-convention-sense Project Profiles. Use when initializing project intelligence, profiling an existing repository, reviewing Profile changes, or updating .convention-sense/profile.json without calling a second LLM.
-compatibility: Pi 0.85.x, Node.js 22.19+, pi-convention-sense Profile schema v1
+compatibility: Pi 0.87.1 (validated baseline), Node.js 22.19+, pi-convention-sense Profile schema v1
 ---
 
 # Project Profiler

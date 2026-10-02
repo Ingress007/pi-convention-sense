@@ -5,7 +5,7 @@
 它会在 Agent 读取代码后，从同仓库、同模块、同角色的实现中提取重复模式，生成有边界的 Local Evidence；项目也可以显式维护受审核的 Project Profile。默认模式是只观察、不阻断的 `observe`，`guard` 仍是实验性显式选项。
 
 > 当前状态：功能闭环已经完成，适合本地开发和受控试用；尚未发布稳定版。
-> 当前开发版本：`0.4.0-alpha.1`（未发布）
+> 当前开发版本：`0.4.0-alpha.1`（未发布；许可证 MIT）
 > Pi 当前验证基线：`0.87.1`（package peer dependency 按 Pi 规范使用 `*`，不代表所有版本均已验证）
 
 ## 1. 它解决什么问题
@@ -69,6 +69,7 @@ TypeScript/Vue 包括：
 - Node.js `>=22.19.0`
 - Pi `0.87.1`：当前开发与真实生命周期验证基线；其他版本见兼容矩阵
 - Git：可选；Shell 后置审计需要 Git
+- 运行时第三方依赖只有 `minimatch`（glob 匹配），随 `npm install` 安装
 
 插件仓库安装依赖并验证：
 
@@ -155,7 +156,40 @@ examples/config/java-guard.json
 
 推荐先运行 Observe，确认候选和 Evidence 质量后再启用 Guard。
 
-配置只有在项目受信任时加载，因此启动 Pi 时需要 `--approve`，或者通过 Pi 的项目信任流程批准项目。
+配置和 Profile 只有在项目受信任时加载。Pi 只有在项目含有受保护资源（`.pi/settings.json`、`.pi/extensions`、`.pi/skills` 等）时才会询问是否信任；只有 `.pi/convention-sense.json` 的项目会被视为自动受信任，而 `pi install -l` 会写入 `.pi/settings.json`，之后需要通过 `--approve` 或 Pi 的项目信任流程批准。无法确定时，运行 `/convention-status` 查看 `project-trusted`、`config-source`、`languages` 和提示。
+
+默认只启用 Java。TypeScript/Vue 项目需要在配置里加入 `"includeLanguages": ["typescript", "vue"]`（见 `examples/config/typescript-vue-observe.json`；前后端在同一仓库时再加上 `"java"`）；项目根目录有 `package.json` 但未启用时，`/convention-status` 会给出提示。
+
+### 完整配置参考
+
+所有字段都是可选的，缺省使用下表默认值。配置只控制系统行为，不承载编码规则（项目知识放进 Project Profile）。不合法的字段会被忽略并回退默认值，原因显示在 `/convention-status` 的 `config=` 行，TUI 启动时也会给出警告；整个文件不是合法 JSON 或根不是对象时，整份配置回退默认值。
+
+| 字段 | 默认值 | 取值与说明 |
+|---|---|---|
+| `enabled` | `true` | `false` 时完全不分析、不注入、不阻断 |
+| `mode` | `"observe"` | `"observe"` 只记录；`"guard"` 实验性，可阻断缺失的 Discovery |
+| `minEvidenceFiles` / `maxEvidenceFiles` | `2` / `4` | 整数 1–10；最大值小于最小值时被提升到最小值；peer 少于最小值时只生成 weak Snapshot |
+| `maxContextTokens` | `1200` | 整数 200–8000，Snapshot、Knowledge Capsule 和 Practice Capsule 共享的预算 |
+| `scopeStrategy` | `"module-role"` | 目前只支持这一种，其他值给出诊断 |
+| `includeLanguages` | `["java"]` | `java`、`typescript`、`vue` 的子集，不区分大小写；未知语言（如拼写错误）给出诊断并被丢弃；空列表表示不分析任何文件 |
+| `exclude` | `**/generated/**`、`**/build/**`、`**/target/**`、`**/vendor/**`、`**/node_modules/**`、`**/.nuxt/**`、`**/.next/**`、`**/.output/**`、`**/coverage/**` | glob 数组，命中的路径不分析、不作为 peer；设置后**整体替换**默认列表 |
+| `injectContext` | `true` | `false` 时不向模型注入任何 Snapshot/Capsule；`guard` 模式下同时自动关闭 `guard.requireRecentContext`（否则永远无法满足） |
+| `persistSessionState` | `true` | 是否写 Session checkpoint |
+| `logPath` | `.pi/convention-sense/observe.ndjson` | 必须位于 `.pi/convention-sense/` 内，且不得经过符号链接或 junction，否则回退默认路径 |
+| `guard.pathExceptions` | `[]` | glob 数组，命中的路径 Guard 直接放行 |
+| `guard.allowBypass` | `true` | 是否允许 `/convention-bypass` |
+| `guard.requireRecentContext` | `true` | valid Snapshot 必须已出现在近期 Context 才放行 |
+| `guard.contextWindowTurns` | `2` | 整数 0–100，“近期”按轮数 |
+| `guard.contextMaxAgeMs` | `600000` | 整数 1000–86400000，“近期”按毫秒 |
+| `postChangeAudit.enabled` / `.notify` | `true` / `true` | Shell 后置审计及其通知 |
+| `postChangeAudit.maxChangedFiles` | `100` | 整数 1–1000 |
+| `practiceReview.mode` | `"suggest"` | `"off"`、`"suggest"` 或 `"auto-once"` |
+| `practiceReview.maxContextTokens` | `400` | 整数 120–1200 |
+| `toolMappings` | `[]` | 第三方工具映射，见 §13 |
+| `logging.level` | `"info"` | `"silent"`、`"info"` 或 `"debug"` |
+| `logging.explainRanking` | `true` | 是否在日志中记录候选评分明细 |
+
+glob 的限制：单个模式最长 512 个字符，单个路径段里 `*` 连续段不超过 5 个、extglob 组（如 `+(a|b)`）不超过 3 个。超出限制的模式没有意义地昂贵（minimatch 的耗时随 `*` 段数指数增长），因此被视为永不匹配；`exclude` 和 `guard.pathExceptions` 里的这类模式会给出 `unsupported glob` 诊断并被丢弃。
 
 ### 第一次使用的最小流程
 
@@ -326,7 +360,7 @@ Profiler 使用当前 Agent，不会引入第二个 LLM；默认生成 `draft`�
 | `.pi/convention-sense.json` | 项目运行配置 | 是 |
 | `.convention-sense/profile.json` | 审核后的项目知识 | 是 |
 | `.convention-sense/profile.candidate.json` | 审核中间文件 | 否 |
-| `.pi/convention-sense/` | 本地日志和 Session 状态 | 否 |
+| `.pi/convention-sense/` | 本地运行日志（Session checkpoint 在 Pi 的 Session 文件里） | 否 |
 | `.tmp/pi-convention-sense/` | 本地临时评估产物 | 否 |
 | `docs/evaluations/` | 永久评估结论 | 是 |
 | `test/fixtures/` | 自动测试资产 | 是 |
@@ -345,20 +379,24 @@ Profiler 使用当前 Agent，不会引入第二个 LLM；默认生成 `draft`�
 /convention-audit
 ```
 
-- `/convention-status`：查看配置来源、Profile、fingerprint、Packs、Practice mode、read、mutation、Guard、Snapshot 和日志状态；
+- `/convention-status`：查看配置来源、语言、最近一次 Guard 判定（`last-guard=`）、Profile、fingerprint、Packs、Practice mode、read、mutation、Guard、Snapshot 和日志状态；
 - `/convention-reset confirm`：清空当前 Branch 的 read ledger、Snapshot、Guard/bypass 和 post-change 状态，并写入空 checkpoint；保留配置、Profile 和审计日志；
-- `/convention-snapshot`：查看当前 Snapshot；
-- `/convention-bypass <path>`：为精确路径提供一次性 bypass；
+- `/convention-snapshot [path]`：不带参数查看最新的 Snapshot；带路径查看该目标的 Snapshot（目标需已读取，或是尚不存在的新文件；非启用语言的文件会说明原因）；
+- `/convention-bypass <path>`：为精确路径提供一次性 bypass，输入路径时会按 Guard 最近问过的目标补全（仅 `guard` 模式且允许 bypass 时）；
 - `/convention-audit`：检查 Shell 修改后的 Discovery 缺口。
 
 `/convention-status` 的项目信息示例：
 
 ```text
-config-source=project
+config-source=project, project-trusted=true
+languages=java,typescript,vue
+last-guard=block TARGET_NOT_READ (edit) src/main/java/com/acme/OrderServiceImpl.java
 practice=suggest, practice-tokens=400
 profile=loaded, review=draft, fingerprint=60e259b2419659a4
 packs=java-spring@1.0.0
 ```
+
+此外还有读取/修改/Guard 计数、Snapshot 数量、日志路径、`config=`（被忽略的配置字段及原因）和 `logger-error=`（日志写入失败时）。项目根目录有 `package.json` 且有 TypeScript/Vue 证据、却没有启用这两种语言时，会多出一行 `hint=`。
 
 Bypass 只在原本会阻断时消费，不跨 Session 或 Branch。
 
@@ -403,13 +441,18 @@ Bypass 只在原本会阻断时消费，不跨 Session 或 Branch。
 - Profile fingerprint；
 - 生命周期事件。
 
+`logPath` 只能位于 `.pi/convention-sense/` 内，日志文件及其上的目录都不得是符号链接或 junction，否则回退到默认路径；默认路径本身不安全时关闭日志。
+
 日志禁止记录：
 
 - 源码正文；
 - edit old/new text；
 - write 内容；
 - 完整 prompt；
-- 完整 Shell 命令。
+- 完整 Shell 命令；
+- 工具输出和错误消息正文。
+
+Extension 的所有生命周期 handler 都会捕获内部异常并 fail-open（Pi 不会替 `tool_call` handler 捕获异常，未处理的异常会阻断用户的编辑）。被吞掉的异常只记录为 `handler_error` 事件：事件名、错误名、错误码和出错位置（函数与文件:行号），**不记录错误消息**，同一错误按第 1、10、100…次限流。日志里出现 `handler_error` 说明有 bug，请反馈。
 
 ## 16. 真实项目验收与业务开发记录
 
@@ -431,7 +474,7 @@ SnailAI 后端和 Admin 已完成静态分析及真实 Pi 主流程验收；Snai
 
 1. 是否从目标 Git repository 根目录启动 Pi；
 2. `.convention-sense/profile.json` 是否存在；
-3. 是否使用 `--approve`；
+3. `/convention-status` 里的 `project-trusted` 是否为 `true`（项目含 `.pi/settings.json` 等受保护资源时需要 `--approve` 或信任流程）；
 4. Profile 的 `repositoryRoot` 是否为当前仓库；
 5. Profile schema 是否通过校验。
 
@@ -441,11 +484,15 @@ Extension 实现代码不会热加载，需要重启 Pi。
 
 ### 修改配置后行为没有变化
 
-`.pi/convention-sense.json` 在启动时加载，修改后需要重启 Pi。
+`.pi/convention-sense.json` 在启动时加载，修改后需要重启 Pi。如果重启后某个字段仍没有生效，运行 `/convention-status` 看 `config=` 行：取值不合法的字段会被忽略并给出原因（见 §5 的配置参考）。
+
+### TypeScript/Vue 文件没有 Snapshot
+
+默认只分析 Java。确认 `includeLanguages` 包含 `typescript` 和 `vue`，并且目标不在 `exclude` 命中的路径或 generated/test 目录里。`/convention-status` 的 `languages=` 与 `hint=` 会指出问题。
 
 ### 为什么仍看到以前读取文件的 Snapshot
 
-如果恢复了原 Session，read ledger 和 Snapshot 可以从 checkpoint 恢复。优先执行：
+如果恢复了原 Session，read ledger 会从 checkpoint 恢复（Snapshot 本身不进 checkpoint，下一轮按已读取的文件重新生成）。优先执行：
 
 ```text
 /convention-reset confirm
@@ -463,16 +510,17 @@ Extension 实现代码不会热加载，需要重启 Pi。
 
 如果 Profile missing，只能使用 base role `controller`。创建并审核 Project Profile 后，effective role 可以将其分为 `mvc-view-controller` 与 `rest-controller`。
 
-## 17. 开发与验证
+## 18. 开发与验证
 
 ```bash
-npm run check
-npm test
-npm run verify
-npm pack --dry-run
+npm run check      # 类型检查
+npm test           # 构建并运行全部测试（需要先 build，脚本已包含）
+npm run verify     # check + 清理构建 + 全部测试
+npm run coverage   # 同上并强制覆盖率门槛（行 88 / 分支 78 / 函数 88）
+npm pack --dry-run # 检查发布 tarball 内容
 ```
 
-当前自动测试基线：`npm run verify` **70/70** 通过。
+当前自动测试基线：`npm run verify` **306/306** 通过。测试包括真实 Pi 离线生命周期（Pi 自己的 loader、agent loop 和 Extension runner，由脚本化 faux 模型驱动，无需网络与凭据）、种子化 fuzz、对抗输入性能预算和 Guard 判定表穷举。单个文件可用 `node --test dist/test/<name>.test.js` 运行（先 `npm run build`）；`FUZZ_SCALE=20 npm test` 放大 fuzz 循环做一次性深度运行，失败信息带 seed，可原样复现。
 
 GitHub Actions 在 Windows/Ubuntu、Node `22.19.0`/`22.x` 上运行 `npm run verify`，并单独检查 package 内容。详见：[兼容性与验证矩阵](docs/compatibility.md)。
 
@@ -492,7 +540,15 @@ node scripts/evaluate-profile-repository.mjs \
 .tmp/pi-convention-sense/evaluations/
 ```
 
-## 18. 当前成熟度与限制
+分析性能基准（合成仓库，只在本地运行，不进 CI）：
+
+```bash
+node scripts/benchmark-analysis.mjs --files 19000 --runs 3
+```
+
+它在系统临时目录生成 Java 和 TypeScript/Vue 仓库，报告冷分析、重复分析、编辑/新增文件后的重分析、freshness 检查耗时和堆增长。
+
+## 19. 当前成熟度与限制
 
 - Observe：适合受控试用；
 - Guard：既定生产准入门槛已通过，继续保持 experimental opt-in、默认 Observe 和 Discovery-only；
@@ -501,13 +557,18 @@ node scripts/evaluate-profile-repository.mjs \
 - Pack catalog：目前只有 Java/Spring 与 TypeScript/Vue 最小 baseline；
 - 未覆盖小程序、移动端、React Native、UniApp、桌面端和其他客户端；
 - 当前只将 Pi `0.87.1` 列为现行验证基线；`0.85.1` 仅保留历史验证记录，其他版本未进入当前回归矩阵；
+- 单个源码文件超过 1 MiB 时不分析（目标文件 fail-open，作为 peer 时被跳过）；
+- 分析使用有界/线性的词法规则，不是完整 parser：极端写法（例如数百字符的泛型返回类型、超长的构造器参数列表、`@Transactional(...)` 里嵌套括号）可能得不到对应信号，按证据不足处理，不会误报；
+- 符号链接/junction 不做 realpath 规范化：同一文件的不同拼写会被视为不同文件（后果只是需要用同一拼写重新读取）；
+- Windows 与 Linux 都由 CI 运行自动测试，但本地真实 Pi 验证主要在 Windows；macOS 尚未验证；
 - Practice Advisor 只提出结构信号支持的审查问题，不断言业务语义、注释必要性、架构优劣或方法必须拆分，也不会把这些主观判断加入 Guard；
 - Profile 目前按 Pi 启动仓库加载，不会为任意外部路径动态切换。
 
-## 19. 文档索引
+## 20. 文档索引
 
 - [项目知识库](docs/knowledge-base.md)
 - [Agent 工作规范](AGENTS.md)
+- [Claude Code 工作指引](CLAUDE.md)
 - [更新日志](CHANGELOG.md)
 - [文件与目录生命周期](docs/file-lifecycle.md)
 - [兼容性与验证矩阵](docs/compatibility.md)

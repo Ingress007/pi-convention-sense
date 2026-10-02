@@ -130,6 +130,15 @@ Facts 必须是结构化摘要，不能保留源码正文。Observation 必须�
 
 不得使用文件名相似度作为唯一主要信号。
 
+### 5.5 稳健性
+
+Adapter 的分析在 Pi 事件循环上同步运行，必须满足：
+
+- 对任意不超过 1 MiB 的输入线性或有界：不要写会对每个锚点都扫到文件末尾的无界正则（无界的 `[^x]*`、惰性 `[\s\S]*?`、`\w*关键字\w*` 之类），用有界重复 `{0,N}` 或手写线性扫描；超过 `MAX_ANALYZED_FILE_BYTES`（1 MiB）的文件不分析；
+- 注释/字符串屏蔽按 UTF-16 下标写入（缓冲区用 `text.split("")`，不用 `[...text]`），保持行与偏移不变，并识别 LF、CR、CRLF；BOM 和 NUL 字节不得破坏分析；
+- generated/test/role/workspace 判定只用仓库相对路径（`classificationPath`），路径比较用 `pathKey`/`samePath`；
+- 可预期的分析失败返回 reason code（`scope-unknown`、`analysis-error`），不向 Pi 生命周期抛异常。
+
 ## 6. 必需测试矩阵
 
 ### A. Scope 单元测试
@@ -191,7 +200,14 @@ Facts 必须是结构化摘要，不能保留源码正文。Observation 必须�
 9. shell 后置审计；
 10. 日志隐私。
 
-### F. 真实仓库验证
+### F. 稳健性测试
+
+- 把新增正则/扫描的最坏输入加进 `test/robustness.test.ts`（每个分析器 1 s 预算）；
+- 新语言的 fixture 放进 `test/fixtures/` 后，`test/line-endings.test.ts` 会自动检查它在 LF/CRLF/CR 下的 facts 一致；
+- 用一个真实仓库的全部文件对修改前后的 facts 做差分，确认只有预期的差异；
+- 新增配置项要同步 `test/fuzz-state.test.ts` 的生成器与不变量。
+
+### G. 真实仓库验证
 
 每个新 stack 在宣称支持前至少验证一个固定 commit 的优质开源仓库：
 
@@ -221,6 +237,8 @@ Facts 必须是结构化摘要，不能保留源码正文。Observation 必须�
 | Snapshot/Capsule | 不超过配置预算 |
 | Guard deadlock | 0 永久阻塞路径 |
 | `npm pack --dry-run` | 成功且包含所需资源 |
+| 对抗输入 | 每个分析器在 1 MiB 级对抗输入上不超过 1 s |
+| 覆盖率 | `npm run coverage` 通过（行 88% / 分支 78% / 函数 88%） |
 
 真实仓库 Top-K 准确率与性能不设置脱离项目规模的伪统一数字。贡献者必须报告样本量、平均值、P95 和误差案例；维护者基于目标 stack 决定是否准入。
 
@@ -232,6 +250,7 @@ Facts 必须是结构化摘要，不能保留源码正文。Observation 必须�
 npm run check
 npm test
 npm run verify
+npm run coverage
 npm pack --dry-run
 ```
 

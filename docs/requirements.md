@@ -165,7 +165,7 @@ Agent 修改包含状态转换、事务、外部副作用或兼容分支的业�
 | FR-09 | P1 | 支持 Session 恢复和 Branch 切换 | V1 可在切换时清空重建；Branch A 的 Snapshot 不得用于 Branch B |
 | FR-10 | P1 | 记录修改账本 | 可追踪目标文件、Scope、修改方式及是否具备有效 Evidence |
 | FR-11 | P1 | 任务结束后输出可选审计结果 | 只报告重大惯例偏离或证据缺口，不评价是否采用“更先进模式” |
-| FR-12 | P1 | 支持项目级行为配置 | 控制模式、阈值、文件数、排除路径和上下文预算，不承载编码规则 |
+| FR-12 | P1 | 支持项目级行为配置 | 控制模式、阈值、文件数、排除路径和上下文预算，不承载编码规则；非法字段给出诊断并回退默认值，不影响其他字段 |
 | FR-13 | P2 | 提供 Project Profiler Skill | 支持 init/adopt/refresh/diff；candidate-first，显式批准后才更新 active Profile |
 | FR-14 | P0 | 加载受信 Project Profile | 校验 schema、repository root、selector 白名单和 fingerprint；missing/invalid/ignored 时 fail-open |
 | FR-15 | P0 | 支持 Global Pack catalog | Pack 由 Profile 显式启用，id/version 参与 freshness，任何 hard 项均降级为 advisory |
@@ -173,7 +173,7 @@ Agent 修改包含状态转换、事务、外部副作用或兼容分支的业�
 | FR-17 | P0 | 注入 Knowledge Capsule | 只注入当前目标匹配的 module/technology/knowledge/convention；与 Snapshot 共享 token 预算 |
 | FR-18 | P0 | 支持 TypeScript/Vue Adapter | 覆盖 page、component、hook、API、request、store、router、layout 和 workspace package |
 | FR-19 | P0 | 强制 repository/Profile trust 隔离 | 不跨仓库取 peer，不从当前会话隐式加载外部仓库 Profile |
-| FR-20 | P1 | 提供 Profile/Pack 状态诊断 | `/convention-status` 展示 config source、Profile status/review/fingerprint、active Packs 和 diagnostics |
+| FR-20 | P1 | 提供 Profile/Pack 状态诊断 | `/convention-status` 展示 config source、项目是否受信任、启用的语言、Profile status/review/fingerprint、active Packs 和 diagnostics；web 项目未启用 TypeScript/Vue 时给出提示；最近一次 Guard 判定（action、reason code、工具、路径）；`/convention-snapshot [path]` 查看指定目标，`/convention-bypass` 按最近被 Guard 询问的目标补全 |
 | FR-21 | P1（已实现） | 构建可解释 Practice Signal | 从现有 production target 提取职责、状态/持久化、事务/副作用、兼容/fallback 和变化轴信号；auto-once 另用不保存正文的 mutation relevance 防止简单编辑借用无关 Signal |
 | FR-22 | P1（已实现） | 注入 Practice Capsule | 优先选择已注入 Snapshot 对应目标；`scope-unknown` fallback 只允许 successful-read existing production target；与 Knowledge Capsule/Snapshot 共享预算，不输出强制模式结论 |
 | FR-23 | P2（已实现） | 支持当前 Agent 一次性自审 | opt-in 使用 `agent_before_settle`，每个任务至多继续一次，不调用第二个 LLM；无 mutation/相关性/Signal 时 fail-open |
@@ -328,9 +328,11 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 
 ## 12. 非功能需求
 
-- **性能**：首次 Scope 发现的额外本地分析目标为亚秒到低秒级；不得每轮扫描全仓库。
-- **Token**：单个 Snapshot 默认不超过 1200 tokens；Practice Capsule 与 Knowledge Capsule、Snapshot 共享总预算，并有独立上限。
-- **可靠性**：分析失败不破坏 Pi 主流程；Observe 降级为日志；Guard 返回可操作说明；Practice 分析失败不得触发自动自审或阻断。
+- **性能**：首次 Scope 发现的额外本地分析目标为亚秒到低秒级（2 万文件级合成仓库冷分析约 1.5 s，重复/编辑后重分析约 0.4 s）；不得每轮扫描全仓库；编辑已存在的文件不得使文件索引失效。
+- **有界性**：分析与命令分类在 Pi 事件循环上同步运行，对任意不超过 1 MiB 的源码输入必须线性或有界（超过 1 MiB 的文件不分析）；Git 审计共享 3 s 总时限；磁盘与内存占用有上限（checkpoint 最多 300 条读取）。
+- **Token**：单个 Snapshot 默认不超过 1200 tokens（CJK 文本按约 1 token/字估算）；Practice Capsule 与 Knowledge Capsule、Snapshot 共享总预算，并有独立上限；放不下时输出闭合的最小形式，绝不截断出未闭合的标签。
+- **可靠性**：分析失败不破坏 Pi 主流程；任何生命周期 handler 的内部异常都不得阻断用户的工具（fail-open，只记录不含错误消息的 `handler_error`）；Observe 降级为日志；Guard 返回可操作说明；Practice 分析失败不得触发自动自审或阻断。
+- **健壮性**：损坏、超大或恶意的配置、checkpoint、Profile 和源码文件不得影响主流程：非法配置字段回退默认值并给出诊断，损坏的 checkpoint 回退到更早的有效版本。
 - **隐私**：正常运行不向独立模型或外部服务发送源码；日志不记录源码、edit/write 正文、完整 prompt 或完整 Shell 命令。
 - **信任隔离**：Profile 只从受信启动仓库加载；外部仓库路径不会隐式扩大信任。
 - **可解释性**：Observation 可回溯到 Evidence；Profile knowledge/convention 可回溯到 manifest、config、source、documentation 或 user-review。
@@ -343,8 +345,10 @@ Draft Profile 中的 hard 项和 Global Pack 中的任何 hard 项都必须降�
 
 - 无足够候选：标记 weak 并明确说明，不得虚构惯例；
 - Scope 冲突：选择保守 Scope 或标记混合，Observe 模式不中断；
-- 分析器异常：记录错误并降级，默认建议 fail-open；
+- 分析器异常：记录错误并降级，默认建议 fail-open；handler 内部异常同样 fail-open，只记录无消息的 `handler_error`；
 - 超大仓库：使用索引、目录限制和缓存；
+- 超大或异常源码文件：超过 1 MiB 不分析，目标 fail-open、peer 跳过；
+- 损坏的配置、checkpoint 或 Profile：回退默认值或更早的有效版本，并给出诊断；
 - 并行工具：只在成功 `tool_result` 后计入 Read Ledger；
 - 文件删除/重命名：Snapshot 失效并重新发现；
 - Shell 修改：标记为 `post-check required`；

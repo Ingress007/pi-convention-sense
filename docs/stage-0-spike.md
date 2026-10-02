@@ -5,6 +5,7 @@
 > 目标 Node.js：`>=22.19.0`
 > 对应需求：[requirements.md](./requirements.md)
 > 对应设计：[design.md](./design.md)
+> 历史记录：本文记录当时的决策与验证结果，不随实现更新；当前行为以 [design.md](./design.md)、[knowledge-base.md](./knowledge-base.md) 和代码为准。
 
 ## 1. Spike 目标
 

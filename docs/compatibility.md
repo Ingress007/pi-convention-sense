@@ -19,18 +19,31 @@ GitHub Actions：`.github/workflows/ci.yml`
 
 | 操作系统 | Node 22.19.0 | Node 22.x | 验证内容 |
 |---|---:|---:|---|
-| Ubuntu latest | CI | CI | TypeScript、70 个自动测试 |
-| Windows latest | CI | CI | TypeScript、70 个自动测试 |
+| Ubuntu latest | CI | CI | TypeScript、306 个自动测试 |
+| Windows latest | CI | CI | TypeScript、306 个自动测试 |
 
 独立 package job 运行：
 
 ```text
 npm pack --dry-run
+npm audit --omit=dev --audit-level=high
 ```
 
-CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 固定为 `0.87.1`，并有独立 step 断言实际安装版本，因此 TypeScript 编译和 70 个测试均针对该 API 运行。
+Ubuntu + Node 22.x 单元格额外运行 `npm run coverage`（行 ≥ 88%、分支 ≥ 78%、函数 ≥ 88%，只统计 `src/` 与 `extensions/`）。audit 只针对会发布的生产依赖；开发依赖里属于 Pi 自身锁定依赖树（`npm-shrinkwrap.json`）的发现无法在此处修复。
+
+CI 使用 `npm ci`，不修改 lockfile。lockfile 与 `devDependencies` 将 Pi 固定为 `0.87.1`，并有独立 step 断言实际安装版本，因此 TypeScript 编译和 306 个测试均针对该 API 运行。
 
 ## 3. Pi 行为验证
+
+### 3.1 离线真实 Pi 生命周期测试（自动，CI）
+
+`test/pi-integration.test.ts` 使用 Pi `0.87.1` 的**真实**资源加载器（jiti 加载 TypeScript 源码）、agent loop、工具 runner 和 Extension runner，由 `@earendil-works/pi-ai` 自带的脚本化 faux 模型驱动，无需网络、凭据或模型费用。它覆盖：package manifest 的 Extension/Skill 加载、Guard 阻断→补读→放行、同批并行工具中 pending read 不满足 Guard（`tool_call` hook 先于任何执行）、observe/guard 下分析异常不会被 Pi 的 `tool_call` fail-safe 阻断、checkpoint 随 run 落盘并随真实 `navigateTree` 重建、auto-once 在真实 `agent_before_settle` 下只续跑一次且简单修改静默。`test/pi-lifecycle.test.ts` 在同一套离线真实 Pi 上继续覆盖：五个 `/convention-*` 命令经 Pi 的命令分发执行（不触发模型调用，通过会记录 `notify`/`setStatus` 的 UI 上报）、bypass 单次且精确路径、**compaction**（读台账与 Snapshot 注入在上下文被压缩后仍然有效）、**reload**（扩展工厂重新运行，台账由 checkpoint 恢复，`session_shutdown:reload → session_start:reload` 顺序）。辅助代码集中在 `test/support/pi-session.ts`；SDK 会话必须调用 `session.bindExtensions()` 才会触发 `session_start`（CLI 各模式会自动调用）。
+
+这些测试不能替代真实模型与真实交互式 TUI 的人工评估，也不扩大 Pi 版本、Node 或操作系统的兼容声明。
+
+2026-10-01 另用本机 Pi `0.87.1` 与真实模型（`deepseek/deepseek-flash`，print 模式，`read,edit,write`）在 SnailJob 后端与 Admin 的**一次性浅克隆**上做了 4 次 smoke（原仓库只读）：Java observe 编辑（读后生成 `valid` Snapshot、下一轮注入、edit 以 `SNAPSHOT_VALID` 放行）、Java guard 新建文件（`write` 先被 `SNAPSHOT_NOT_INJECTED` 阻断，下一轮注入 Snapshot 后模型重试并放行）、Vue observe 编辑、Java guard + draft Profile + `auto-once`（Profile `loaded`，无 Signal 时 `no-review-capsule` 静默）。4 次 run 均无 `handler_error`。这是单模型、单次的行为证据，不构成模型兼容声明。
+
+### 3.2 真实 Pi 与历史记录
 
 自动测试均使用 Pi `0.87.1` 类型和运行时依赖。真实 Pi 证据按当前与历史基线分开记录：
 
@@ -71,7 +84,7 @@ SnailJob 后端与 Admin 的完整结果见 [SnailJob Pi 0.87.1 验收](evaluati
 
 | 系统 | 自动测试 | 真实交互式 Pi | 状态 |
 |---|---:|---:|---|
-| Windows | CI | 是 | 主要开发环境 |
+| Windows | CI | 是 | 主要开发环境；`path-key.test.ts` 的 Windows 专属用例（盘符/大小写/`\\?\` 扩展前缀/UNC/超过 MAX_PATH 的路径）只在 win32 运行；junction/符号链接不做 realpath 规范化，同一文件的不同拼写会被视为不同文件 |
 | Linux | CI | 否 | 自动测试覆盖 |
 | macOS | 否 | 否 | 尚未验证 |
 
@@ -111,6 +124,18 @@ Global Pack 只能是 advisory。未审核 draft Profile 的 hard 规则同样�
 5. 对 Extension API 或 Pi 版本变化记录真实日志；
 6. 更新本文档和 Changelog；
 7. 不得以 silent-on-clean 的 LSP 结果替代 TypeScript 编译和自动测试。
+
+### 9.1 发布流程（发布由维护者手动执行，工具和 CI 都不会自动发布）
+
+包已具备发布元数据（`license: MIT`、`author`、`repository`、`bugs`、`homepage`，没有 `private` 标志），`prepublishOnly` 会先跑 `npm run verify`。发布前按顺序：
+
+1. 确定版本号，更新 `package.json`、README/知识库里的开发版本和 `CHANGELOG.md`（把 `[Unreleased]` 改成带日期的版本节）；
+2. `npm run verify`、`npm run coverage`、`npm pack --dry-run`、`git diff --check`；
+3. `node scripts/smoke-package-install.mjs --provider <provider> --model <model>`：把 `npm pack` 的 tarball 解开、只装生产依赖、用真实 `pi` 安装进一个干净的临时项目并跑一个最短 prompt，检查扩展加载、生命周期日志齐全且没有 `handler_error`（需要本机 `pi`、一个已配置的模型和 npm 网络；不会发布任何东西）；
+4. 确认 CI 的 Windows/Ubuntu × Node 22.19/22.x 全部通过；
+5. 维护者手动 `npm publish`，之后验证 `pi install npm:pi-convention-sense -l` 在一个干净项目里可用。
+
+发布包只含 `extensions/`、`src/`、`docs/`、`examples/`、`skills/`、`README.md`、`CHANGELOG.md` 和 `LICENSE`；`scripts/` 不随包发布（它们导入未发布的 `dist/` 构建产物，只在本仓库内使用）。Pi 不支持把 `.tgz` 作为本地安装源，`pi install` 只接受 `npm:`、`git:` 和目录。
 
 ## 10. 当前不在范围内
 

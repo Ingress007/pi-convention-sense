@@ -95,6 +95,20 @@ Strength is `hard` or `advisory`, but:
 
 Project item source is `agent-draft`, `human`, or `imported`. Every hard item should have explicit evidence and review provenance.
 
+## Validation rules
+
+`node ./scripts/profile-tools.mjs validate` and the runtime loader enforce the same rules (a differential test fails when they disagree). A Profile that breaks any of them is `invalid` at runtime and is ignored (fail-open to Local Evidence):
+
+- `profileVersion` and `project.name` are non-empty strings; `generatedAt` parses as a date;
+- every item in `technologies`, `modules`, `scopeOverrides`, `knowledge`, and `conventions` has a non-empty `id`, unique within its own list;
+- `priority`, when present, is a finite number; `version` and `effectiveRole`, when present, are strings; `architecture`, `tags`, `knowledgeRefs`, and `conventionRefs`, when present, are string arrays;
+- technology `kind` is one of the kinds listed above, and `confidence` is `high`, `medium`, or `low`; every technology and override carries an `evidence` array;
+- knowledge items require `category` (one of the six above), `title`, and `summary`; convention items require `category` and `statement`; both require `strength` and `source`;
+- every path (`paths`, `excludePaths`, evidence `path`, `detailPath`) is non-empty, repository-relative, not absolute, has no drive letter, and has no `..` segment;
+- `project.relatedProjects` entries need a `name`, a `path`, and a valid relationship.
+
+Path selectors are matched as globs with minimatch. For safety the runtime refuses very long or very complex patterns (more than 512 characters, more than 5 `*` runs in one path segment, or more than 3 extglob groups in one segment): they never match. Keep selectors simple; the validator does not flag such patterns.
+
 ## Version and review rules
 
 - New Agent-generated Profiles start as draft.
