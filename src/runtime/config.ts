@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ToolMappingConfig } from "../observe/types.js";
+import { isSupportedGlob } from "./glob.js";
+import { logTargetTravelsThroughLink } from "./log-safety.js";
+import { isPathInside } from "./paths.js";
 import type { LoadedSpikeConfig, LogLevel, SpikeConfig, SpikeMode } from "./types.js";
 
 const DEFAULT_EXCLUDE = [
@@ -16,6 +19,7 @@ const DEFAULT_EXCLUDE = [
 ];
 
 const BUILTIN_TOOL_NAMES = new Set(["read", "edit", "write", "bash", "powershell"]);
+const SUPPORTED_LANGUAGES: readonly string[] = ["java", "typescript", "vue"];
 
 export function createDefaultConfig(configDirName = ".pi"): SpikeConfig {
   return {
@@ -101,6 +105,38 @@ function readStringArray(
   return [...fallback];
 }
 
+function readGlobArray(
+  source: Record<string, unknown>,
+  key: string,
+  fallback: readonly string[],
+  diagnostics: string[],
+  label = key,
+): string[] {
+  return readStringArray(source, key, fallback, diagnostics).filter((pattern) => {
+    if (isSupportedGlob(pattern)) return true;
+    diagnostics.push(`Ignoring unsupported glob pattern in ${label}: ${JSON.stringify(pattern.slice(0, 40))}`);
+    return false;
+  });
+}
+
+// A misspelled language would otherwise silently disable analysis for that language.
+function readLanguages(
+  source: Record<string, unknown>,
+  fallback: readonly string[],
+  diagnostics: string[],
+): string[] {
+  const requested = readStringArray(source, "includeLanguages", fallback, diagnostics).map((item) => item.toLowerCase());
+  const languages: string[] = [];
+  for (const language of new Set(requested)) {
+    if (SUPPORTED_LANGUAGES.includes(language)) languages.push(language);
+    else diagnostics.push(`Ignoring unsupported language ${JSON.stringify(language.slice(0, 40))} in includeLanguages`);
+  }
+  if (source.includeLanguages !== undefined && languages.length === 0) {
+    diagnostics.push("includeLanguages is empty; no source files will be analyzed");
+  }
+  return languages;
+}
+
 function readMode(source: Record<string, unknown>, fallback: SpikeMode, diagnostics: string[]): SpikeMode {
   const value = source.mode;
   if (value === undefined) return fallback;
@@ -150,12 +186,32 @@ function readExplainRanking(
   return fallback;
 }
 
-function readLogPath(source: Record<string, unknown>, fallback: string, diagnostics: string[]): string {
+// The project config is repository-controlled input, so the log may only live in the plugin's own
+// state directory (never in an arbitrary project file, a parent directory or a linked location).
+function readLogPath(
+  source: Record<string, unknown>,
+  fallback: string,
+  diagnostics: string[],
+  cwd: string,
+  configDirName: string,
+): string {
   const value = source.logPath;
   if (value === undefined) return fallback;
-  if (typeof value === "string" && value.trim().length > 0) return value.trim();
-  diagnostics.push("Ignoring invalid logPath; expected a non-empty string");
-  return fallback;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    diagnostics.push("Ignoring invalid logPath; expected a non-empty string");
+    return fallback;
+  }
+  const requested = value.trim();
+  const candidate = resolveLogPath(cwd, requested);
+  if (!isPathInside(resolve(cwd, configDirName, "convention-sense"), candidate)) {
+    diagnostics.push(`Ignoring logPath outside ${configDirName}/convention-sense/; using the default`);
+    return fallback;
+  }
+  if (logTargetTravelsThroughLink(cwd, candidate)) {
+    diagnostics.push("Ignoring logPath that travels through a symbolic link or junction; using the default");
+    return fallback;
+  }
+  return requested;
 }
 
 function readNestedObject(
@@ -231,6 +287,23 @@ export function loadSpikeConfig(
   projectTrusted: boolean,
   configDirName = ".pi",
 ): LoadedSpikeConfig {
+  const loaded = readSpikeConfig(cwd, projectTrusted, configDirName);
+  // A custom logPath that is unsafe already fell back to the default. If even the default location
+  // is unsafe (a repository can ship a symlinked log file), keep running without a log.
+  if (logTargetTravelsThroughLink(cwd, resolveLogPath(cwd, loaded.config.logPath))) {
+    loaded.config.logging.level = "silent";
+    loaded.diagnostics.push(
+      "Logging disabled because the log path travels through a symbolic link or junction",
+    );
+  }
+  return loaded;
+}
+
+function readSpikeConfig(
+  cwd: string,
+  projectTrusted: boolean,
+  configDirName: string,
+): LoadedSpikeConfig {
   const defaults = createDefaultConfig(configDirName);
   const configPath = join(cwd, configDirName, "convention-sense.json");
   const diagnostics: string[] = [];
@@ -295,8 +368,8 @@ export function loadSpikeConfig(
       diagnostics,
     ),
     scopeStrategy: "module-role",
-    includeLanguages: readStringArray(parsed, "includeLanguages", defaults.includeLanguages, diagnostics).map((item) => item.toLowerCase()),
-    exclude: readStringArray(parsed, "exclude", defaults.exclude, diagnostics),
+    includeLanguages: readLanguages(parsed, defaults.includeLanguages, diagnostics),
+    exclude: readGlobArray(parsed, "exclude", defaults.exclude, diagnostics),
     injectContext: readBoolean(parsed, "injectContext", defaults.injectContext, diagnostics),
     persistSessionState: readBoolean(
       parsed,
@@ -304,15 +377,16 @@ export function loadSpikeConfig(
       defaults.persistSessionState,
       diagnostics,
     ),
-    logPath: readLogPath(parsed, defaults.logPath, diagnostics),
+    logPath: readLogPath(parsed, defaults.logPath, diagnostics, cwd, configDirName),
     guard: (() => {
       const guard = readNestedObject(parsed, "guard", diagnostics);
       return {
-        pathExceptions: readStringArray(
+        pathExceptions: readGlobArray(
           guard,
           "pathExceptions",
           defaults.guard.pathExceptions,
           diagnostics,
+          "guard.pathExceptions",
         ),
         allowBypass: readBoolean(guard, "allowBypass", defaults.guard.allowBypass, diagnostics),
         requireRecentContext: readBoolean(

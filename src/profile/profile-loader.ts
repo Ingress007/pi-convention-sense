@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { isRacyClean } from "../runtime/racy-clean.js";
 import {
   PROJECT_PROFILE_SCHEMA_VERSION,
   type ProfileEvidenceRef,
@@ -35,6 +36,36 @@ function isOptionalStringArray(value: unknown): boolean {
   return value === undefined || isStringArray(value);
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isOptionalNonEmptyStringArray(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every(isNonEmptyString));
+}
+
+// Paths in a Profile are repository-relative: never absolute, never leaving the repository. This must
+// stay identical to safeRepositoryPath in skills/project-profiler/scripts/profile-tools.mjs; the
+// differential test in test/profile-differential.test.ts keeps the two validators in agreement.
+function isSafeRepositoryPath(value: unknown): value is string {
+  if (!isNonEmptyString(value) || isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)) return false;
+  return !value.replaceAll("\\", "/").split("/").includes("..");
+}
+
+function isOptionalSafePathArray(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every(isSafeRepositoryPath));
+}
+
+function hasUniqueNonEmptyIds(items: unknown): boolean {
+  if (!Array.isArray(items)) return false;
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!isRecord(item) || !isNonEmptyString(item.id) || seen.has(item.id)) return false;
+    seen.add(item.id);
+  }
+  return true;
+}
+
 function isSelector(value: unknown): value is ProfileSelector {
   if (!isRecord(value)) return false;
   const allowedKeys = new Set([
@@ -49,14 +80,14 @@ function isSelector(value: unknown): value is ProfileSelector {
   ]);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
   return (
-    isOptionalStringArray(value.paths) &&
-    isOptionalStringArray(value.excludePaths) &&
-    isOptionalStringArray(value.languages) &&
-    isOptionalStringArray(value.modules) &&
-    isOptionalStringArray(value.baseRoles) &&
-    isOptionalStringArray(value.fileNames) &&
-    isOptionalStringArray(value.annotationsAny) &&
-    isOptionalStringArray(value.dependenciesAny)
+    isOptionalSafePathArray(value.paths) &&
+    isOptionalSafePathArray(value.excludePaths) &&
+    isOptionalNonEmptyStringArray(value.languages) &&
+    isOptionalNonEmptyStringArray(value.modules) &&
+    isOptionalNonEmptyStringArray(value.baseRoles) &&
+    isOptionalNonEmptyStringArray(value.fileNames) &&
+    isOptionalNonEmptyStringArray(value.annotationsAny) &&
+    isOptionalNonEmptyStringArray(value.dependenciesAny)
   );
 }
 
@@ -64,9 +95,9 @@ function isEvidence(value: unknown): value is ProfileEvidenceRef {
   if (!isRecord(value)) return false;
   return (
     ["manifest", "config", "source", "documentation", "user-review"].includes(String(value.kind)) &&
-    (value.path === undefined || typeof value.path === "string") &&
+    (value.path === undefined || isSafeRepositoryPath(value.path)) &&
     (value.line === undefined || (Number.isInteger(value.line) && Number(value.line) > 0)) &&
-    typeof value.detail === "string"
+    isNonEmptyString(value.detail)
   );
 }
 
@@ -91,7 +122,7 @@ function isModule(value: unknown): value is ProjectModuleProfile {
   if (!isRecord(value)) return false;
   return (
     typeof value.id === "string" &&
-    typeof value.title === "string" &&
+    isNonEmptyString(value.title) &&
     (value.priority === undefined || Number.isFinite(value.priority)) &&
     isSelector(value.selector) &&
     (value.technologies === undefined || (Array.isArray(value.technologies) && value.technologies.every(isTechnology))) &&
@@ -129,15 +160,15 @@ function isKnowledge(value: unknown): value is ProjectKnowledgeItem {
   if (!isRecord(value) || !hasRuleFields(value)) return false;
   return (
     ["architecture", "domain", "dependency", "workflow", "security", "data"].includes(String(value.category)) &&
-    typeof value.title === "string" &&
-    typeof value.summary === "string" &&
-    (value.detailPath === undefined || typeof value.detailPath === "string")
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.summary) &&
+    (value.detailPath === undefined || isSafeRepositoryPath(value.detailPath))
   );
 }
 
 function isConvention(value: unknown): value is ProjectConventionItem {
   if (!isRecord(value) || !hasRuleFields(value)) return false;
-  return typeof value.category === "string" && typeof value.statement === "string";
+  return isNonEmptyString(value.category) && isNonEmptyString(value.statement);
 }
 
 function validateProfile(value: unknown, repositoryRoot: string, diagnostics: string[]): value is ProjectProfile {
@@ -148,10 +179,10 @@ function validateProfile(value: unknown, repositoryRoot: string, diagnostics: st
   if (value.schemaVersion !== PROJECT_PROFILE_SCHEMA_VERSION) {
     diagnostics.push(`Unsupported profile schemaVersion: ${String(value.schemaVersion)}`);
   }
-  if (typeof value.profileVersion !== "string" || value.profileVersion.length === 0) {
+  if (!isNonEmptyString(value.profileVersion)) {
     diagnostics.push("profileVersion must be a non-empty string");
   }
-  if (!isRecord(value.project) || typeof value.project.name !== "string" || value.project.repositoryRoot !== ".") {
+  if (!isRecord(value.project) || !isNonEmptyString(value.project.name) || value.project.repositoryRoot !== ".") {
     diagnostics.push('project must contain a name and repositoryRoot must be "."');
   }
   if (typeof value.generatedAt !== "string" || Number.isNaN(Date.parse(value.generatedAt))) {
@@ -171,7 +202,7 @@ function validateProfile(value: unknown, repositoryRoot: string, diagnostics: st
     !value.packs.every(
       (item) =>
         isRecord(item) &&
-        typeof item.id === "string" &&
+        isNonEmptyString(item.id) &&
         typeof item.enabled === "boolean" &&
         ["builtin", "project"].includes(String(item.source)) &&
         (item.version === undefined || typeof item.version === "string"),
@@ -191,13 +222,18 @@ function validateProfile(value: unknown, repositoryRoot: string, diagnostics: st
   if (!Array.isArray(value.conventions) || !value.conventions.every(isConvention)) {
     diagnostics.push("conventions must contain valid project conventions");
   }
+  for (const key of ["technologies", "modules", "scopeOverrides", "knowledge", "conventions"] as const) {
+    if (Array.isArray(value[key]) && !hasUniqueNonEmptyIds(value[key])) {
+      diagnostics.push(`${key} must have unique non-empty ids`);
+    }
+  }
 
   if (isRecord(value.project) && Array.isArray(value.project.relatedProjects)) {
     const valid = value.project.relatedProjects.every(
       (item) =>
         isRecord(item) &&
-        typeof item.name === "string" &&
-        typeof item.path === "string" &&
+        isNonEmptyString(item.name) &&
+        isNonEmptyString(item.path) &&
         ["frontend", "backend", "service", "library", "documentation"].includes(String(item.relationship)),
     );
     if (!valid) diagnostics.push("project.relatedProjects contains invalid entries");
@@ -224,19 +260,17 @@ export function createProfileFingerprint(profile: ProjectProfile): string {
   return createHash("sha256").update(stableSerialize(profile)).digest("hex").slice(0, 16);
 }
 
-export function loadProjectProfile(
-  repositoryRoot: string,
-  trusted: boolean,
-  relativeProfilePath = DEFAULT_PROJECT_PROFILE_PATH,
-): LoadedProjectProfile {
-  const profilePath = resolve(repositoryRoot, relativeProfilePath);
-  const diagnostics: string[] = [];
-  if (!existsSync(profilePath)) return { profilePath, status: "missing", diagnostics };
-  if (!trusted) {
-    diagnostics.push("Project Profile exists but was ignored because the project is not trusted");
-    return { profilePath, status: "ignored", diagnostics };
-  }
+// loadProjectProfile runs for every active path on every model request. An unchanged file must not be
+// re-read, re-parsed and re-hashed, but a Profile edit has to take effect immediately, so a file that is
+// still racy-clean (see isRacyClean) is always re-read.
+const MAX_CACHED_PROFILES = 20;
+const profileCache = new Map<string, { mtimeMs: number; size: number; loaded: LoadedProjectProfile }>();
 
+function readProjectProfile(
+  profilePath: string,
+  repositoryRoot: string,
+  diagnostics: string[],
+): LoadedProjectProfile {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(profilePath, "utf8"));
@@ -255,6 +289,40 @@ export function loadProjectProfile(
     fingerprint: createProfileFingerprint(parsed),
     diagnostics,
   };
+}
+
+/** The returned object may be shared between calls: treat it as read-only. */
+export function loadProjectProfile(
+  repositoryRoot: string,
+  trusted: boolean,
+  relativeProfilePath = DEFAULT_PROJECT_PROFILE_PATH,
+): LoadedProjectProfile {
+  const profilePath = resolve(repositoryRoot, relativeProfilePath);
+  const diagnostics: string[] = [];
+  if (!existsSync(profilePath)) return { profilePath, status: "missing", diagnostics };
+  if (!trusted) {
+    diagnostics.push("Project Profile exists but was ignored because the project is not trusted");
+    return { profilePath, status: "ignored", diagnostics };
+  }
+
+  let stat;
+  try {
+    stat = statSync(profilePath);
+  } catch {
+    return { profilePath, status: "missing", diagnostics };
+  }
+  const cacheable = !isRacyClean(stat.mtimeMs, Date.now());
+  const cached = cacheable ? profileCache.get(profilePath) : undefined;
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.loaded;
+
+  const loaded = readProjectProfile(profilePath, repositoryRoot, diagnostics);
+  if (cacheable) {
+    if (profileCache.size >= MAX_CACHED_PROFILES) profileCache.clear();
+    profileCache.set(profilePath, { mtimeMs: stat.mtimeMs, size: stat.size, loaded });
+  } else {
+    profileCache.delete(profilePath);
+  }
+  return loaded;
 }
 
 export function resolveDefaultProfilePath(repositoryRoot: string): string {

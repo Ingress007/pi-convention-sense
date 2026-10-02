@@ -1,4 +1,5 @@
 import { dirname, relative, resolve, sep } from "node:path";
+import { foldPathCase, pathKey, samePath } from "../runtime/path-key.js";
 import type { LoadedProjectProfile } from "../profile/profile-loader.js";
 import { applyProjectProfileToScope, effectiveScopeRole } from "../profile/profiled-scope.js";
 import type { ConventionPack } from "../profile/types.js";
@@ -24,7 +25,7 @@ function jaccard(left: readonly string[], right: readonly string[]): number {
 
 function samePackageOrSibling(target: JavaFileFacts, candidate: JavaFileFacts): number {
   if (target.packageName && candidate.packageName && target.packageName === candidate.packageName) return 1;
-  return dirname(target.path) === dirname(candidate.path) ? 1 : 0;
+  return samePath(dirname(target.path), dirname(candidate.path)) ? 1 : 0;
 }
 
 function determineLevel(
@@ -33,19 +34,19 @@ function determineLevel(
   candidatePath: string,
   candidateScope: ConventionScope,
 ): 0 | 1 | 2 | 3 {
-  if (dirname(targetPath) === dirname(candidatePath)) return 0;
+  if (samePath(dirname(targetPath), dirname(candidatePath))) return 0;
   if (targetScope.module === candidateScope.module) return 1;
-  if (dirname(targetScope.root) === dirname(candidateScope.root)) return 2;
+  if (samePath(dirname(targetScope.root), dirname(candidateScope.root))) return 2;
   return 3;
 }
 
 function preliminaryScore(path: string, targetPath: string, targetScope: ConventionScope): number {
   let score = 30;
-  if (dirname(path) === dirname(targetPath)) score += 40;
+  if (samePath(dirname(path), dirname(targetPath))) score += 40;
   const rel = relative(targetScope.root, path);
   if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..")) score += 25;
   const targetParentName = dirname(targetPath).split(sep).at(-1);
-  if (targetParentName && dirname(path).split(sep).includes(targetParentName)) score += 10;
+  if (targetParentName && foldPathCase(dirname(path)).split(sep).includes(foldPathCase(targetParentName))) score += 10;
   return score;
 }
 
@@ -107,9 +108,11 @@ export function rankJavaCandidates(options: {
   const target = resolve(options.targetPath);
   const targetSourceKind = options.targetFacts.sourceKind;
   const prelim = options.indexedFiles
-    .filter((path) => resolve(path) !== target)
-    .filter((path) => detectJavaRole(path).role === options.targetFacts.role)
-    .filter((path) => targetSourceKind !== "production" || detectSourceKind(path) !== "test")
+    .filter((path) => pathKey(path) !== pathKey(target))
+    .filter((path) => detectJavaRole(path, "", options.repositoryRoot).role === options.targetFacts.role)
+    .filter(
+      (path) => targetSourceKind !== "production" || detectSourceKind(path, options.repositoryRoot) !== "test",
+    )
     .map((path) => ({ path, score: preliminaryScore(path, target, options.targetScope) }))
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
 
@@ -118,7 +121,7 @@ export function rankJavaCandidates(options: {
   const deepAnalysisLimit = options.deepAnalysisLimit ?? (options.targetScope.effectiveRole ? 60 : 20);
   for (const preliminary of prelim.slice(0, deepAnalysisLimit)) {
     try {
-      const facts = analyzeJavaFile(preliminary.path);
+      const facts = analyzeJavaFile(preliminary.path, options.repositoryRoot);
       if (facts.generated || facts.role !== options.targetFacts.role) continue;
       if (
         options.targetFacts.role === "service-interface" &&

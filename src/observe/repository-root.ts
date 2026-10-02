@@ -1,12 +1,8 @@
-import { existsSync, statSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
+import { isPathInside } from "../runtime/paths.js";
 
 const BUILD_MARKERS = ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"];
-
-function isInside(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
 
 function startingDirectory(targetPath: string): string {
   let current = resolve(targetPath);
@@ -41,6 +37,35 @@ function findOutermostBuildRoot(targetPath: string): string | undefined {
   }
 }
 
+const WEB_SOURCE = /.(?:ts|tsx|mts|cts|vue)$/i;
+
+function declaresWorkspaces(directory: string): boolean {
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(resolve(directory, "package.json"), "utf8"));
+    return typeof manifest === "object" && manifest !== null && "workspaces" in manifest;
+  } catch {
+    return false;
+  }
+}
+
+// Without a .git directory a web project has no repository boundary, so the nearest package.json
+// is its root, upgraded to the outermost pnpm/npm workspace root so `apps/<name>` stays visible.
+function findWebProjectRoot(targetPath: string): string | undefined {
+  let current = startingDirectory(targetPath);
+  let nearest: string | undefined;
+  let workspaceRoot: string | undefined;
+  while (true) {
+    const hasManifest = existsSync(resolve(current, "package.json"));
+    if (hasManifest) nearest ??= current;
+    if (existsSync(resolve(current, "pnpm-workspace.yaml")) || (hasManifest && declaresWorkspaces(current))) {
+      workspaceRoot = current;
+    }
+    const parent = dirname(current);
+    if (parent === current) return workspaceRoot ?? nearest;
+    current = parent;
+  }
+}
+
 function findSourceModuleRoot(targetPath: string): string | undefined {
   const normalized = resolve(targetPath);
   const parts = normalized.split(sep);
@@ -61,6 +86,7 @@ export function resolveAnalysisRepositoryRoot(targetPath: string, workingDirecto
   const cwd = resolve(workingDirectory);
   const gitRoot = findNearestGitRoot(target);
   if (gitRoot) return gitRoot;
-  if (isInside(cwd, target)) return cwd;
-  return findOutermostBuildRoot(target) ?? findSourceModuleRoot(target) ?? startingDirectory(target);
+  if (isPathInside(cwd, target, { allowEqual: true })) return cwd;
+  const webRoot = WEB_SOURCE.test(target) ? findWebProjectRoot(target) : undefined;
+  return webRoot ?? findOutermostBuildRoot(target) ?? findSourceModuleRoot(target) ?? startingDirectory(target);
 }

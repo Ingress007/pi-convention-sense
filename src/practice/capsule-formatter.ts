@@ -1,5 +1,6 @@
 import { relative, resolve, sep } from "node:path";
 import { estimateTokens } from "../observe/snapshot-formatter.js";
+import { escapeXml } from "../runtime/xml.js";
 import type {
   FormattedPracticeCapsule,
   PracticeAnalysisResult,
@@ -7,15 +8,6 @@ import type {
 } from "./types.js";
 
 const MAX_INCLUDED_SIGNALS = 6;
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
 
 function displayPath(repositoryRoot: string, targetPath: string): string {
   const value = relative(resolve(repositoryRoot), resolve(targetPath));

@@ -22,6 +22,7 @@ import {
 } from "../src/practice/signal-analyzer.js";
 import type { PracticeAnalysisResult } from "../src/practice/types.js";
 import { loadSpikeConfig } from "../src/runtime/config.js";
+import { isCaseInsensitivePlatform } from "../src/runtime/path-key.js";
 import { buildDynamicContextResult } from "../src/runtime/context.js";
 import { createSpikeState } from "../src/runtime/state.js";
 
@@ -327,4 +328,19 @@ test("Practice analysis fails open and shares Context budget without displacing 
   assert.equal(off.includedSnapshots.length, 1);
   assert.deepEqual(off.includedPracticeSignalIds, []);
   assert.doesNotMatch(off.content, /engineering-practice/);
+});
+
+test("Practice Review Runtime dedupes mutations by platform path key and keeps the first spelling", () => {
+  const runtime = new PracticeReviewRuntime();
+  runtime.beginTask();
+  const original = resolve("/repo", "Order.java");
+  const variant = resolve("/repo", "order.java");
+  runtime.recordMutation(original, "irrelevant");
+  runtime.recordMutation(variant, "relevant");
+
+  const mutations = runtime.current().mutations;
+  assert.equal(mutations.length, isCaseInsensitivePlatform() ? 1 : 2);
+  if (isCaseInsensitivePlatform()) {
+    assert.deepEqual(mutations, [{ path: original, relevance: "relevant" }]);
+  }
 });

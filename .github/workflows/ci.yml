@@ -39,10 +39,17 @@ jobs:
         run: npm ci
 
       - name: Verify Pi development baseline
-        run: node -e "const v = require('./node_modules/@earendil-works/pi-coding-agent/package.json').version; if (v !== '0.87.1') throw new Error('Expected Pi 0.87.1, got ' + v); console.log('Pi ' + v)"
+        run: node -e "for (const name of ['pi-coding-agent', 'pi-ai']) { const v = require('./node_modules/@earendil-works/' + name + '/package.json').version; if (v !== '0.87.1') throw new Error('Expected ' + name + ' 0.87.1, got ' + v); console.log(name + ' ' + v) }"
 
+      # Includes the offline real-Pi lifecycle tests (Pi's own loader, agent loop and extension runner
+      # driven by a scripted faux model): no network access or credentials are needed.
       - name: Typecheck and test
         run: npm run verify
+
+      # One cell is enough to enforce the gate; the skipped platform-specific tests differ per OS.
+      - name: Coverage gate
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22.x'
+        run: npm run coverage
 
   package:
     name: Package contents
@@ -62,3 +69,8 @@ jobs:
 
       - name: Verify package contents
         run: npm pack --dry-run
+
+      # Only what ships is audited. Dev-only findings inside Pi's own pinned dependency tree are not
+      # actionable here.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high

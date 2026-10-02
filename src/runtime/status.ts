@@ -1,4 +1,28 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { SpikeConfig, SpikeRuntimeState, SpikeStatus } from "./types.js";
+
+/**
+ * A package.json alone proves nothing: Java projects often keep one for husky or commitlint. A web
+ * project also has a tsconfig.json or depends on TypeScript or Vue.
+ */
+export function looksLikeWebProject(directory: string): boolean {
+  const manifestPath = join(directory, "package.json");
+  if (!existsSync(manifestPath)) return false;
+  if (existsSync(join(directory, "tsconfig.json"))) return true;
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (typeof manifest !== "object" || manifest === null) return false;
+    return ["dependencies", "devDependencies", "peerDependencies"].some((key) => {
+      const group = (manifest as Record<string, unknown>)[key];
+      if (typeof group !== "object" || group === null) return false;
+      return Object.keys(group).some((name) => name === "vue" || name === "typescript" || name.startsWith("@vue/"));
+    });
+  } catch {
+    return false;
+  }
+}
+
 
 export interface StatusInput {
   config: SpikeConfig;

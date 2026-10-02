@@ -1,4 +1,5 @@
 import type { ObserveConfig } from "../observe/types.js";
+import type { PathSet } from "./path-key.js";
 
 export const SPIKE_STATE_ENTRY_TYPE = "pi-convention-sense-spike-state";
 export const SPIKE_CONTEXT_TYPE = "pi-convention-sense-context";
@@ -68,7 +69,7 @@ export interface PendingRead {
 }
 
 export interface SpikeRuntimeState {
-  successfulReads: Set<string>;
+  successfulReads: PathSet;
   recentReads: ReadRecord[];
   pendingReads: Map<string, PendingRead>;
   mutations: MutationRecord[];
@@ -80,14 +81,6 @@ export interface SpikeRuntimeState {
   postChangeAuditCount: number;
   postChangeGapCount: number;
   restoredFromCheckpoint: boolean;
-}
-
-export interface GuardDecision {
-  action: GuardAction;
-  reasonCode: "TARGET_ALREADY_READ" | "TARGET_NOT_READ" | "NEW_FILE_BYPASS" | "EXTENSION_DISABLED";
-  message: string;
-  targetPath: string;
-  targetExists: boolean;
 }
 
 export interface ToolResultLike {

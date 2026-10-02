@@ -1,6 +1,7 @@
 import type { ToolMappingConfig } from "../observe/types.js";
 import { resolveToolMapping } from "../guard/tool-mapping.js";
 import { classifyShellMutationRisk, normalizeToolPath } from "./paths.js";
+import { PathSet, pathKey } from "./path-key.js";
 import {
   SPIKE_STATE_ENTRY_TYPE,
   SPIKE_STATE_VERSION,
@@ -18,10 +19,12 @@ import {
 
 const MAX_MUTATIONS = 100;
 const MAX_RECENT_READS = 100;
+// A checkpoint is a full snapshot of the ledger, so it keeps only the most recent reads.
+const MAX_CHECKPOINT_READS = 300;
 
 export function createSpikeState(): SpikeRuntimeState {
   return {
-    successfulReads: new Set<string>(),
+    successfulReads: new PathSet(),
     recentReads: [],
     pendingReads: new Map(),
     mutations: [],
@@ -40,20 +43,26 @@ export function createSpikeState(): SpikeRuntimeState {
   };
 }
 
+// Counters come from a session file: a corrupt value (negative, fractional, huge) must not reach the status line
+// or the Guard counters, so such a checkpoint is treated as invalid and the previous valid one is used instead.
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function isMutationRecord(value: unknown): value is MutationRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Partial<MutationRecord>;
   return (
     typeof record.path === "string" &&
     (record.toolName === "edit" || record.toolName === "write") &&
-    typeof record.completedAt === "number"
+    Number.isFinite(record.completedAt)
   );
 }
 
 function isReadRecord(value: unknown): value is ReadRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Partial<ReadRecord>;
-  return typeof record.path === "string" && typeof record.completedAt === "number";
+  return typeof record.path === "string" && Number.isFinite(record.completedAt);
 }
 
 function hasCheckpointBase(value: unknown): value is LegacySpikeCheckpoint | ObserveCheckpoint | SpikeCheckpoint {
@@ -64,14 +73,10 @@ function hasCheckpointBase(value: unknown): value is LegacySpikeCheckpoint | Obs
     return false;
   }
   if (!Array.isArray(checkpoint.mutations) || !checkpoint.mutations.every(isMutationRecord)) return false;
-  if (typeof checkpoint.shellRiskCount !== "number") return false;
+  if (!isCount(checkpoint.shellRiskCount)) return false;
   if (typeof checkpoint.guardCounters !== "object" || checkpoint.guardCounters === null) return false;
   const counters = checkpoint.guardCounters;
-  return (
-    typeof counters.allow === "number" &&
-    typeof counters.wouldBlock === "number" &&
-    typeof counters.block === "number"
-  );
+  return isCount(counters.allow) && isCount(counters.wouldBlock) && isCount(counters.block);
 }
 
 function isCheckpoint(value: unknown): value is LegacySpikeCheckpoint | ObserveCheckpoint | SpikeCheckpoint {
@@ -79,17 +84,13 @@ function isCheckpoint(value: unknown): value is LegacySpikeCheckpoint | ObserveC
   if (value.version === 1) return true;
   if (!Array.isArray(value.recentReads) || !value.recentReads.every(isReadRecord)) return false;
   if (value.version === 2) return true;
-  return (
-    typeof value.bypassCount === "number" &&
-    typeof value.postChangeAuditCount === "number" &&
-    typeof value.postChangeGapCount === "number"
-  );
+  return isCount(value.bypassCount) && isCount(value.postChangeAuditCount) && isCount(value.postChangeGapCount);
 }
 
 export function checkpointState(state: SpikeRuntimeState): SpikeCheckpoint {
   return {
     version: SPIKE_STATE_VERSION,
-    successfulReads: [...state.successfulReads].sort(),
+    successfulReads: [...state.successfulReads].slice(-MAX_CHECKPOINT_READS),
     recentReads: state.recentReads.slice(-MAX_RECENT_READS),
     mutations: state.mutations.slice(-MAX_MUTATIONS),
     shellRiskCount: state.shellRiskCount,
@@ -111,9 +112,11 @@ export function restoreStateFromBranch(entries: readonly SessionEntryLike[]): Sp
   const state = createSpikeState();
   if (!latest) return state;
 
-  state.successfulReads = new Set(latest.successfulReads);
+  // Older versions wrote the whole ledger; keep the newest entries so a bloated or hostile file stays bounded.
+  const reads = latest.successfulReads.slice(-MAX_CHECKPOINT_READS);
+  state.successfulReads = new PathSet(reads);
   state.recentReads = latest.version === 1
-    ? latest.successfulReads.map((path, index) => ({ path, completedAt: index }))
+    ? reads.map((path, index) => ({ path, completedAt: index })).slice(-MAX_RECENT_READS)
     : latest.recentReads.slice(-MAX_RECENT_READS);
   state.mutations = latest.mutations.slice(-MAX_MUTATIONS);
   state.shellRiskCount = latest.shellRiskCount;
@@ -164,8 +167,11 @@ export function recordToolResult(
     const path = pending?.path ?? (rawPath ? normalizeToolPath(cwd, rawPath) : undefined);
 
     if (!event.isError && path) {
+      // Re-adding moves the file to the end, so the ledger iterates from least to most recently read.
+      state.successfulReads.delete(path);
       state.successfulReads.add(path);
-      state.recentReads = state.recentReads.filter((record) => record.path !== path);
+      const key = pathKey(path);
+      state.recentReads = state.recentReads.filter((record) => pathKey(record.path) !== key);
       state.recentReads.push({ path, completedAt: now });
       if (state.recentReads.length > MAX_RECENT_READS) {
         state.recentReads.splice(0, state.recentReads.length - MAX_RECENT_READS);

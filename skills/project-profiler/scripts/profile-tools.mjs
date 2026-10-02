@@ -14,6 +14,11 @@ const SELECTOR_KEYS = new Set([
   "annotationsAny",
   "dependenciesAny",
 ]);
+// The runtime loader (src/profile/profile-loader.ts) is the authority; test/profile-differential.test.ts
+// fails when this validator and the loader disagree about any Profile.
+const TECHNOLOGY_KINDS = ["language", "framework", "architecture", "persistence", "transport", "build", "database", "infrastructure"];
+const KNOWLEDGE_CATEGORIES = ["architecture", "domain", "dependency", "workflow", "security", "data"];
+const RELATIONSHIPS = ["frontend", "backend", "service", "library", "documentation"];
 const REQUIRED_ARRAYS = [
   "technologies",
   "packs",
@@ -122,6 +127,18 @@ function validateEvidence(evidence, location, diagnostics) {
   });
 }
 
+function optionalStrings(value) {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
+}
+
+function validateTechnology(item, location, diagnostics) {
+  if (!isRecord(item)) return;
+  if (!TECHNOLOGY_KINDS.includes(item.kind)) diagnostics.push(`${location}.kind is invalid`);
+  if (item.version !== undefined && typeof item.version !== "string") diagnostics.push(`${location}.version must be a string`);
+  if (!["high", "medium", "low"].includes(item.confidence)) diagnostics.push(`${location}.confidence is invalid`);
+  validateEvidence(item.evidence, `${location}.evidence`, diagnostics);
+}
+
 function validateIds(items, location, diagnostics) {
   const seen = new Set();
   items.forEach((item, index) => {
@@ -159,38 +176,57 @@ function validateProfile(profile) {
   for (const key of REQUIRED_ARRAYS) {
     if (!Array.isArray(profile[key])) diagnostics.push(`${key} must be an array`);
   }
+  if (isRecord(profile.project) && Array.isArray(profile.project.relatedProjects)) {
+    profile.project.relatedProjects.forEach((item, index) => {
+      const valid = isRecord(item) && nonEmptyString(item.name) && nonEmptyString(item.path) &&
+        RELATIONSHIPS.includes(item.relationship);
+      if (!valid) diagnostics.push(`project.relatedProjects[${index}] is invalid`);
+    });
+  }
   if (diagnostics.some((message) => /must be an array$/.test(message))) return { diagnostics, warnings };
 
   for (const key of ["technologies", "modules", "scopeOverrides", "knowledge", "conventions"]) {
     validateIds(profile[key], key, diagnostics);
   }
 
-  profile.technologies.forEach((item, index) => {
-    const location = `technologies[${index}]`;
-    if (!isRecord(item)) return;
-    if (!nonEmptyString(item.kind)) diagnostics.push(`${location}.kind is required`);
-    if (!["high", "medium", "low"].includes(item.confidence)) diagnostics.push(`${location}.confidence is invalid`);
-    validateEvidence(item.evidence, `${location}.evidence`, diagnostics);
-  });
+  profile.technologies.forEach((item, index) => validateTechnology(item, `technologies[${index}]`, diagnostics));
 
   profile.packs.forEach((item, index) => {
     const location = `packs[${index}]`;
     if (!isRecord(item) || !nonEmptyString(item.id)) diagnostics.push(`${location}.id is required`);
     if (!isRecord(item) || typeof item.enabled !== "boolean") diagnostics.push(`${location}.enabled must be boolean`);
     if (!isRecord(item) || !["builtin", "project"].includes(item.source)) diagnostics.push(`${location}.source is invalid`);
+    if (isRecord(item) && item.version !== undefined && typeof item.version !== "string") {
+      diagnostics.push(`${location}.version must be a string`);
+    }
   });
 
   profile.modules.forEach((item, index) => {
     const location = `modules[${index}]`;
     if (!isRecord(item)) return;
     if (!nonEmptyString(item.title)) diagnostics.push(`${location}.title is required`);
+    if (item.priority !== undefined && !Number.isFinite(item.priority)) diagnostics.push(`${location}.priority must be a finite number`);
     validateSelector(item.selector, `${location}.selector`, diagnostics);
+    if (item.technologies !== undefined) {
+      if (!Array.isArray(item.technologies)) diagnostics.push(`${location}.technologies must be an array`);
+      else item.technologies.forEach((technology, at) => validateTechnology(technology, `${location}.technologies[${at}]`, diagnostics));
+    }
+    for (const key of ["architecture", "knowledgeRefs", "conventionRefs"]) {
+      if (!optionalStrings(item[key])) diagnostics.push(`${location}.${key} must be a string array`);
+    }
   });
 
   profile.scopeOverrides.forEach((item, index) => {
     const location = `scopeOverrides[${index}]`;
     if (!isRecord(item)) return;
+    if (item.priority !== undefined && !Number.isFinite(item.priority)) diagnostics.push(`${location}.priority must be a finite number`);
     validateSelector(item.selector, `${location}.selector`, diagnostics);
+    if (item.effectiveRole !== undefined && typeof item.effectiveRole !== "string") {
+      diagnostics.push(`${location}.effectiveRole must be a string`);
+    }
+    for (const key of ["architecture", "tags"]) {
+      if (!optionalStrings(item[key])) diagnostics.push(`${location}.${key} must be a string array`);
+    }
     if (!["high", "medium", "low"].includes(item.confidence)) diagnostics.push(`${location}.confidence is invalid`);
     validateEvidence(item.evidence, `${location}.evidence`, diagnostics);
   });
@@ -199,6 +235,14 @@ function validateProfile(profile) {
     profile[key].forEach((item, index) => {
       const location = `${key}[${index}]`;
       if (!isRecord(item)) return;
+      if (key === "knowledge") {
+        if (!KNOWLEDGE_CATEGORIES.includes(item.category)) diagnostics.push(`${location}.category is invalid`);
+        if (!nonEmptyString(item.title)) diagnostics.push(`${location}.title is required`);
+        if (!nonEmptyString(item.summary)) diagnostics.push(`${location}.summary is required`);
+      } else {
+        if (!nonEmptyString(item.category)) diagnostics.push(`${location}.category is required`);
+        if (!nonEmptyString(item.statement)) diagnostics.push(`${location}.statement is required`);
+      }
       if (!["hard", "advisory"].includes(item.strength)) diagnostics.push(`${location}.strength is invalid`);
       if (!["agent-draft", "human", "imported"].includes(item.source)) diagnostics.push(`${location}.source is invalid`);
       if (item.selector !== undefined) validateSelector(item.selector, `${location}.selector`, diagnostics);

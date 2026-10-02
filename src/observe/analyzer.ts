@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { extname, resolve } from "node:path";
+import { describeHandlerError } from "../runtime/handler-errors.js";
 import type { LoadedProjectProfile } from "../profile/profile-loader.js";
 import { applyProjectProfileToScope } from "../profile/profiled-scope.js";
 import type { ConventionPack } from "../profile/types.js";
@@ -7,6 +8,7 @@ import { rankJavaCandidates, type RankCandidatesResult } from "./candidate-ranke
 import { buildConventionEvidence, createConfigFingerprint } from "./evidence-builder.js";
 import { analyzeJavaFile, detectJavaRole, detectSourceKind } from "./java-analyzer.js";
 import { RepositoryIndexCache, matchesExcludedPath } from "./repository-index.js";
+import { classificationPath } from "./repository-path.js";
 import { detectConventionScope } from "./scope-detector.js";
 import { formatConventionSnapshot } from "./snapshot-formatter.js";
 import {
@@ -35,15 +37,15 @@ function prospectivePackageName(targetPath: string): string | undefined {
   return packagePath ? packagePath.split("/").filter(Boolean).join(".") : undefined;
 }
 
-function prospectiveJavaFacts(targetPath: string): JavaFileFacts {
-  const role = detectJavaRole(targetPath);
+function prospectiveJavaFacts(targetPath: string, repositoryRoot: string): JavaFileFacts {
+  const role = detectJavaRole(targetPath, "", repositoryRoot);
   const packageName = prospectivePackageName(targetPath);
   return {
     path: targetPath,
     ...(packageName ? { packageName } : {}),
     role: role.role,
     roleConfidence: role.confidence,
-    sourceKind: detectSourceKind(targetPath),
+    sourceKind: detectSourceKind(targetPath, repositoryRoot),
     annotations: [],
     imports: [],
     superTypes: [],
@@ -51,7 +53,7 @@ function prospectiveJavaFacts(targetPath: string): JavaFileFacts {
     size: 0,
     mtimeMs: 0,
     contentHash: "prospective",
-    generated: /[/\\](?:generated|target|build)[/\\]/i.test(targetPath),
+    generated: /[/\\](?:generated|target|build)[/\\]/i.test(classificationPath(targetPath, repositoryRoot)),
     deprecated: false,
   };
 }
@@ -163,6 +165,7 @@ export class ObserveAnalyzer {
       return {
         reason: "analysis-error",
         error: error instanceof Error ? error.message : String(error),
+        ...describeHandlerError(error),
         durationMs: Date.now() - startedAt,
         indexedFileCount,
         consideredCandidateCount,
@@ -272,7 +275,7 @@ export class ObserveAnalyzer {
             target,
             repositoryRoot,
             config,
-            analyzeJavaFile(target),
+            analyzeJavaFile(target, repositoryRoot),
             "existing",
             startedAt,
             profileOptions,
@@ -281,7 +284,7 @@ export class ObserveAnalyzer {
             target,
             repositoryRoot,
             config,
-            analyzeTypeScriptFile(target),
+            analyzeTypeScriptFile(target, repositoryRoot),
             "existing",
             startedAt,
             profileOptions,
@@ -290,6 +293,7 @@ export class ObserveAnalyzer {
       return {
         reason: "analysis-error",
         error: error instanceof Error ? error.message : String(error),
+        ...describeHandlerError(error),
         durationMs: Date.now() - startedAt,
         indexedFileCount: 0,
         consideredCandidateCount: 0,
@@ -321,7 +325,7 @@ export class ObserveAnalyzer {
           target,
           repositoryRoot,
           config,
-          prospectiveJavaFacts(target),
+          prospectiveJavaFacts(target, repositoryRoot),
           "prospective",
           startedAt,
           profileOptions,
@@ -330,7 +334,7 @@ export class ObserveAnalyzer {
           target,
           repositoryRoot,
           config,
-          prospectiveTypeScriptFacts(target),
+          prospectiveTypeScriptFacts(target, repositoryRoot),
           "prospective",
           startedAt,
           profileOptions,
@@ -339,5 +343,14 @@ export class ObserveAnalyzer {
 
   invalidateIndex(): void {
     this.index.invalidate();
+  }
+
+  /** Tell the index a file was created, deleted or edited; only creations and deletions cost a rescan. */
+  noteFileChanged(path: string): void {
+    this.index.noteFileChanged(path);
+  }
+
+  get indexBuildCount(): number {
+    return this.index.buildCount;
   }
 }

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { pathKey } from "../runtime/path-key.js";
 
 export type PracticeMutationRelevance = "relevant" | "unknown" | "irrelevant";
 
@@ -86,7 +87,7 @@ export function planPracticeReviewBoundary(input: {
 
 export class PracticeReviewRuntime {
   private generation = 0;
-  private readonly mutations = new Map<string, PracticeMutationRelevance>();
+  private readonly mutations = new Map<string, PracticeReviewMutation>();
   private requested = false;
 
   beginTask(): number {
@@ -98,10 +99,12 @@ export class PracticeReviewRuntime {
 
   recordMutation(path: string, relevance: PracticeMutationRelevance = "unknown"): void {
     if (this.generation === 0) return;
-    const normalized = resolve(path);
-    const current = this.mutations.get(normalized);
-    if (!current || relevanceRank(relevance) > relevanceRank(current)) {
-      this.mutations.set(normalized, relevance);
+    const key = pathKey(path);
+    const current = this.mutations.get(key);
+    if (!current) {
+      this.mutations.set(key, { path: resolve(path), relevance });
+    } else if (relevanceRank(relevance) > relevanceRank(current.relevance)) {
+      current.relevance = relevance;
     }
   }
 
@@ -114,8 +117,8 @@ export class PracticeReviewRuntime {
   current(): PracticeReviewTaskState {
     return {
       generation: this.generation,
-      mutations: [...this.mutations.entries()]
-        .map(([path, relevance]) => ({ path, relevance }))
+      mutations: [...this.mutations.values()]
+        .map(({ path, relevance }) => ({ path, relevance }))
         .sort((left, right) => left.path.localeCompare(right.path)),
       requested: this.requested,
     };

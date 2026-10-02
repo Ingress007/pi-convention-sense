@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { isSymbolicLink } from "./log-safety.js";
 import type { LogLevel } from "./types.js";
 
 export interface LogMetadata {
@@ -38,6 +39,11 @@ export class NdjsonSpikeLogger {
     if (metadata.sessionId !== undefined) record.sessionId = metadata.sessionId;
     if (metadata.sessionFile !== undefined) record.sessionFile = metadata.sessionFile;
     if (metadata.leafId !== undefined) record.leafId = metadata.leafId;
+
+    if (isSymbolicLink(this.filePath)) {
+      this.lastError = "refused to write through a symbolic link";
+      return;
+    }
 
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });

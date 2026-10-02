@@ -1,8 +1,28 @@
 import { relative } from "node:path";
+import { escapeXml } from "../runtime/xml.js";
 import type { ConventionObservation, ConventionSnapshot } from "./types.js";
 
+// CJK ideographs, kana, hangul and full-width forms: tokenizers spend about one token per character on
+// them, against roughly four characters per token for Latin text. Counting them as Latin would
+// under-estimate Chinese Profiles and Snapshots by two to four times and blow the Context budget.
+// Plain comparisons: this runs over every character of text that the trimming loops re-estimate on
+// each iteration, so it must not allocate.
+function isCjk(code: number): boolean {
+  return (
+    (code >= 0x3000 && code <= 0x30ff) || // CJK symbols and punctuation, hiragana, katakana
+    (code >= 0x3400 && code <= 0x4dbf) || // CJK extension A
+    (code >= 0x4e00 && code <= 0x9fff) || // CJK unified ideographs
+    (code >= 0xac00 && code <= 0xd7af) || // hangul syllables
+    (code >= 0xff00 && code <= 0xffef) // full-width forms
+  );
+}
+
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  let cjk = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (isCjk(text.charCodeAt(index))) cjk += 1;
+  }
+  return Math.ceil((text.length - cjk) / 4 + cjk);
 }
 
 function shorten(value: string, maxLength: number): string {
@@ -19,7 +39,7 @@ function observationLine(observation: ConventionObservation): string {
   const counter = observation.counterEvidence.length > 0
     ? `; counter=${observation.counterEvidence.length}`
     : "";
-  return `- [${observation.confidence}/${observation.status}] ${observation.category}: ${observation.pattern} (${observation.support}/${observation.samples}${counter})`;
+  return `- [${observation.confidence}/${observation.status}] ${escapeXml(observation.category)}: ${escapeXml(observation.pattern)} (${observation.support}/${observation.samples}${counter})`;
 }
 
 function renderSnapshot(
@@ -29,15 +49,15 @@ function renderSnapshot(
   candidatePaths: readonly string[],
 ): string {
   const lines = [
-    `<local-convention scope="${snapshot.scope.language}:${snapshot.scope.module}:${snapshot.scope.effectiveRole ?? snapshot.scope.role}" confidence="${snapshot.scope.confidence}" status="${snapshot.status}">`,
+    `<local-convention scope="${escapeXml(`${snapshot.scope.language}:${snapshot.scope.module}:${snapshot.scope.effectiveRole ?? snapshot.scope.role}`)}" confidence="${snapshot.scope.confidence}" status="${snapshot.status}">`,
     "Target:",
-    `- ${relativeDisplay(repositoryRoot, snapshot.targetPath)}`,
+    `- ${escapeXml(relativeDisplay(repositoryRoot, snapshot.targetPath))}`,
     "",
     candidatePaths.length < snapshot.evidenceFiles.length
       ? `Comparable implementations (showing ${candidatePaths.length} of ${snapshot.evidenceFiles.length}):`
       : "Comparable implementations:",
     ...(candidatePaths.length > 0
-      ? candidatePaths.map((path) => `- ${relativeDisplay(repositoryRoot, path)}`)
+      ? candidatePaths.map((path) => `- ${escapeXml(relativeDisplay(repositoryRoot, path))}`)
       : ["- none found"]),
     "",
     "Repeated observations:",
@@ -105,16 +125,14 @@ export function formatConventionSnapshot(
     observations = [];
     const scope = `${shorten(snapshot.scope.language, 16)}:${shorten(snapshot.scope.module, 32)}:${shorten(snapshot.scope.effectiveRole ?? snapshot.scope.role, 32)}`;
     text = [
-      `<local-convention scope="${scope}" status="${snapshot.status}">`,
+      `<local-convention scope="${escapeXml(scope)}" status="${snapshot.status}">`,
       "Evidence details omitted to fit the context budget.",
       "Treat local conventions as evidence, not absolute rules.",
       "</local-convention>",
     ].join("\n");
   }
-  if (estimateTokens(text) > maxTokens) {
-    text = text.slice(0, Math.max(0, maxTokens * 4));
-  }
-
+  // If even the minimal closed form exceeds the budget, return it as is with its true estimate: the
+  // caller skips what does not fit. Cutting it would inject an unclosed tag into the model context.
   return {
     text,
     tokenEstimate: estimateTokens(text),

@@ -1,4 +1,7 @@
 import { resolve } from "node:path";
+import { PathSet, pathKey } from "../runtime/path-key.js";
+import { normalizeToolPath } from "../runtime/paths.js";
+import { escapeXml } from "../runtime/xml.js";
 
 export interface PostChangeFinding {
   path: string;
@@ -11,9 +14,8 @@ export class PostChangeAuditRuntime {
   private readonly byPath = new Map<string, PostChangeFinding>();
 
   addGap(path: string, now = Date.now()): void {
-    const key = resolve(path);
-    this.byPath.set(key, {
-      path: key,
+    this.byPath.set(pathKey(path), {
+      path: resolve(path),
       reasonCode: "POST_CHANGE_EVIDENCE_GAP",
       detectedAt: now,
       delivered: false,
@@ -26,7 +28,7 @@ export class PostChangeAuditRuntime {
 
   markDelivered(findings: readonly PostChangeFinding[]): void {
     for (const finding of findings) {
-      const current = this.byPath.get(resolve(finding.path));
+      const current = this.byPath.get(pathKey(finding.path));
       if (current) current.delivered = true;
     }
   }
@@ -34,7 +36,7 @@ export class PostChangeAuditRuntime {
   resolve(paths: readonly string[]): number {
     let resolved = 0;
     for (const path of paths) {
-      if (this.byPath.delete(resolve(path))) resolved += 1;
+      if (this.byPath.delete(pathKey(path))) resolved += 1;
     }
     return resolved;
   }
@@ -48,6 +50,29 @@ export class PostChangeAuditRuntime {
   }
 }
 
+export interface ChangedSourceInput {
+  cwd: string;
+  /** Paths as Git reports them: relative to `cwd`. */
+  changedPaths: readonly string[];
+  isProductionSource(absolutePath: string): boolean;
+  isExcluded(absolutePath: string): boolean;
+  isException(absolutePath: string): boolean;
+}
+
+/** The changed files the audit cares about: configured production sources that are neither excluded nor excepted. */
+export function selectChangedSources(input: ChangedSourceInput): string[] {
+  return input.changedPaths
+    .map((path) => normalizeToolPath(input.cwd, path))
+    .filter((path) => input.isProductionSource(path))
+    .filter((path) => !input.isExcluded(path))
+    .filter((path) => !input.isException(path));
+}
+
+/** The changed sources whose Discovery was not complete before the command ran. */
+export function selectEvidenceGaps(changedSources: readonly string[], coveredBefore: PathSet): string[] {
+  return changedSources.filter((path) => !coveredBefore.has(path));
+}
+
 export function createPostChangeAuditMessage(
   displayPaths: readonly string[],
   mode: "observe" | "guard",
@@ -55,7 +80,7 @@ export function createPostChangeAuditMessage(
   const content = [
     `<convention-post-change-audit mode="${mode}" status="evidence-gap">`,
     "A shell command changed configured source files without verified preflight Convention Evidence:",
-    ...displayPaths.map((path) => `- ${path}`),
+    ...displayPaths.map((path) => `- ${escapeXml(path)}`),
     "Before further edits, read each affected target and relevant peers so Convention Sense can rebuild a fresh Snapshot.",
     "Do not automatically revert the completed shell command.",
     "</convention-post-change-audit>",

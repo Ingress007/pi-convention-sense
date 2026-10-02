@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
+import { MAX_ANALYZED_FILE_BYTES } from "./limits.js";
+import { classificationPath } from "./repository-path.js";
 import type {
   ScopeConfidence,
   SourceKind,
@@ -38,10 +40,6 @@ function unique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
-function normalizedPath(path: string): string {
-  return path.replaceAll("\\", "/");
-}
-
 export function detectTypeScriptLanguage(path: string): "typescript" | "vue" | undefined {
   const extension = extname(path).toLowerCase();
   if (extension === ".vue") return "vue";
@@ -49,12 +47,13 @@ export function detectTypeScriptLanguage(path: string): "typescript" | "vue" | u
   return undefined;
 }
 
-export function detectTypeScriptSourceKind(path: string): SourceKind {
-  return TEST_PATH.test(path) ? "test" : "production";
+export function detectTypeScriptSourceKind(path: string, repositoryRoot?: string): SourceKind {
+  return TEST_PATH.test(classificationPath(path, repositoryRoot)) ? "test" : "production";
 }
 
 function stripTypeScriptComments(content: string): string {
-  const output = [...content];
+  // UTF-16 units, like the indexes below: spreading into code points would shift every write after an emoji.
+  const output = content.split("");
   let state: "code" | "line" | "block" | "single" | "double" | "template" = "code";
   for (let index = 0; index < content.length; index += 1) {
     const current = content[index] ?? "";
@@ -101,7 +100,24 @@ function stripTypeScriptComments(content: string): string {
       state = "code";
     }
   }
-  return output.join("").replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\r\n]/g, " "));
+  return blankHtmlComments(output.join(""));
+}
+
+// A lazy `[\s\S]*?` regex rescans to EOF from every unterminated `<!--`.
+function blankHtmlComments(text: string): string {
+  let result = "";
+  let cursor = 0;
+  for (;;) {
+    const open = text.indexOf("<!--", cursor);
+    if (open < 0) break;
+    const close = text.indexOf("-->", open + 4);
+    // Without a closing marker no later comment can close either.
+    if (close < 0) break;
+    const end = close + 3;
+    result += text.slice(cursor, open) + text.slice(open, end).replace(/[^\r\n]/g, " ");
+    cursor = end;
+  }
+  return result + text.slice(cursor);
 }
 
 function roleResult(role: WebRole, confidence: ScopeConfidence): { role: WebRole; confidence: ScopeConfidence } {
@@ -111,8 +127,9 @@ function roleResult(role: WebRole, confidence: ScopeConfidence): { role: WebRole
 export function detectTypeScriptRole(
   path: string,
   content = "",
+  repositoryRoot?: string,
 ): { role: WebRole; confidence: ScopeConfidence } {
-  const normalized = normalizedPath(path).toLowerCase();
+  const normalized = classificationPath(path, repositoryRoot).toLowerCase();
   const fileName = basename(path).toLowerCase();
   const code = stripTypeScriptComments(content);
 
@@ -155,13 +172,39 @@ export function detectTypeScriptRole(
   return roleResult("unknown", "low");
 }
 
+// `import "x"`, `import a from "x"` and `export * from "x"`: the text between the keyword and the first quote must be
+// whitespace or end in `from`. Each keyword only looks as far as the next keyword, so the scan stays linear where a
+// lazy `[^"']*?` regex rescans to the next quote (or EOF) from every keyword.
+function isModuleClause(head: string): boolean {
+  if (!/^\s/.test(head) || !/\s$/.test(head)) return false;
+  const clause = head.trim();
+  if (clause.length === 0) return true;
+  return clause.length > 4 && clause.endsWith("from") && /\s/.test(clause.charAt(clause.length - 5));
+}
+
+function firstQuote(code: string, from: number, limit: number): number {
+  for (let index = from; index < limit; index += 1) {
+    const char = code.charCodeAt(index);
+    if (char === 34 || char === 39) return index;
+  }
+  return -1;
+}
+
+function collectModuleSpecifier(code: string, from: number, limit: number, imports: string[]): void {
+  const open = firstQuote(code, from, limit);
+  if (open < 0 || !isModuleClause(code.slice(from, open))) return;
+  const close = firstQuote(code, open + 1, code.length);
+  if (close > open + 1) imports.push(code.slice(open + 1, close));
+}
+
 function extractImports(code: string): string[] {
   const imports: string[] = [];
-  const pattern = /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g;
-  for (const match of code.matchAll(pattern)) {
-    const value = match[1];
-    if (value) imports.push(value);
+  let previousEnd = -1;
+  for (const match of code.matchAll(/\b(?:import|export)\b/g)) {
+    if (previousEnd >= 0) collectModuleSpecifier(code, previousEnd, match.index, imports);
+    previousEnd = match.index + match[0].length;
   }
+  if (previousEnd >= 0) collectModuleSpecifier(code, previousEnd, code.length, imports);
   for (const match of code.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
     const value = match[1];
     if (value) imports.push(value);
@@ -200,7 +243,7 @@ function detectSignals(
   else if (exports.length > 0) add("export-style", "named");
 
   if (language === "vue") {
-    if (/<script\b[^>]*\bsetup\b/i.test(code)) add("component-style", "script-setup");
+    if (/<script\b[^>]{0,300}\bsetup\b/i.test(code)) add("component-style", "script-setup");
     else if (/\bdefineComponent\s*\(/.test(code)) add("component-style", "define-component");
     else if (/\bexport\s+default\s*\{/.test(code)) add("component-style", "options-api");
 
@@ -209,13 +252,13 @@ function detectSignals(
     if (/\bwithDefaults\s*\(\s*defineProps/.test(code)) add("props-defaults", "with-defaults");
     if (/\bdefineEmits\s*</.test(code)) add("emits-style", "type-based");
     else if (/\bdefineEmits\s*\(\s*\[/.test(code)) add("emits-style", "runtime");
-    if (/<style\b[^>]*\bmodule\b/i.test(code)) add("style-scope", "module");
-    else if (/<style\b[^>]*\bscoped\b/i.test(code)) add("style-scope", "scoped");
+    if (/<style\b[^>]{0,300}\bmodule\b/i.test(code)) add("style-scope", "module");
+    else if (/<style\b[^>]{0,300}\bscoped\b/i.test(code)) add("style-scope", "scoped");
     else if (/<style\b/i.test(code)) add("style-scope", "global");
   }
 
-  if (/\bdefineStore\s*\([^,]+,\s*(?:async\s*)?\(/.test(code)) add("store-style", "setup");
-  else if (/\bdefineStore\s*\([^,]+,\s*\{/.test(code)) add("store-style", "options");
+  if (/\bdefineStore\s*\([^,]{1,200},\s*(?:async\s*)?\(/.test(code)) add("store-style", "setup");
+  else if (/\bdefineStore\s*\([^,]{1,200},\s*\{/.test(code)) add("store-style", "options");
 
   if (/\baxios\b/.test(code)) add("request-style", "axios");
   else if (/\bfetch\s*\(/.test(code)) add("request-style", "fetch");
@@ -235,21 +278,24 @@ function detectSignals(
   return signals;
 }
 
-export function analyzeTypeScriptFile(path: string): TypeScriptFileFacts {
+export function analyzeTypeScriptFile(path: string, repositoryRoot?: string): TypeScriptFileFacts {
   const language = detectTypeScriptLanguage(path);
   if (!language) throw new Error(`Unsupported TypeScript/Vue file: ${path}`);
+  const stat = statSync(path);
+  if (stat.size > MAX_ANALYZED_FILE_BYTES) {
+    throw new Error(`Source file too large to analyze (${stat.size} bytes > ${MAX_ANALYZED_FILE_BYTES})`);
+  }
   const content = readFileSync(path, "utf8");
   const code = stripTypeScriptComments(content);
-  const stat = statSync(path);
-  const role = detectTypeScriptRole(path, code);
+  const role = detectTypeScriptRole(path, code, repositoryRoot);
   const exports = extractExports(code);
   const frameworkPrimitives = FRAMEWORK_PRIMITIVES.filter((name) =>
     new RegExp(`\\b${name}\\b`).test(code),
   );
-  const normalized = normalizedPath(path);
+  const normalized = classificationPath(path, repositoryRoot);
   const workspaceMatch = normalized.match(/\/(?:packages|apps)\/([^/]+)\//i);
   const generated =
-    GENERATED_PATH.test(path) ||
+    GENERATED_PATH.test(normalized) ||
     /\.d\.[cm]?ts$/i.test(path) ||
     /(?:@generated|generated by|do not edit)/i.test(content.slice(0, 800));
 
@@ -258,7 +304,7 @@ export function analyzeTypeScriptFile(path: string): TypeScriptFileFacts {
     language,
     role: role.role,
     roleConfidence: role.confidence,
-    sourceKind: detectTypeScriptSourceKind(path),
+    sourceKind: detectTypeScriptSourceKind(path, repositoryRoot),
     annotations: unique(frameworkPrimitives),
     imports: extractImports(code),
     superTypes: unique([
@@ -277,18 +323,18 @@ export function analyzeTypeScriptFile(path: string): TypeScriptFileFacts {
   };
 }
 
-export function prospectiveTypeScriptFacts(path: string): TypeScriptFileFacts {
+export function prospectiveTypeScriptFacts(path: string, repositoryRoot?: string): TypeScriptFileFacts {
   const language = detectTypeScriptLanguage(path);
   if (!language) throw new Error(`Unsupported TypeScript/Vue file: ${path}`);
-  const role = detectTypeScriptRole(path);
-  const normalized = normalizedPath(path);
+  const role = detectTypeScriptRole(path, "", repositoryRoot);
+  const normalized = classificationPath(path, repositoryRoot);
   const workspaceMatch = normalized.match(/\/(?:packages|apps)\/([^/]+)\//i);
   return {
     path,
     language,
     role: role.role,
     roleConfidence: role.confidence,
-    sourceKind: detectTypeScriptSourceKind(path),
+    sourceKind: detectTypeScriptSourceKind(path, repositoryRoot),
     annotations: [],
     imports: [],
     superTypes: [],
@@ -296,7 +342,7 @@ export function prospectiveTypeScriptFacts(path: string): TypeScriptFileFacts {
     size: 0,
     mtimeMs: 0,
     contentHash: "prospective",
-    generated: GENERATED_PATH.test(path) || /\.d\.[cm]?ts$/i.test(path),
+    generated: GENERATED_PATH.test(normalized) || /\.d\.[cm]?ts$/i.test(path),
     deprecated: false,
     ...(workspaceMatch?.[1] ? { workspacePackage: workspaceMatch[1] } : {}),
     exportNames: [],

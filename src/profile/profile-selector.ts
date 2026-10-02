@@ -1,5 +1,5 @@
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
-import { minimatch } from "minimatch";
+import { globMatches } from "../runtime/glob.js";
 import type { ProfileSelector } from "./types.js";
 
 export interface ProfileTargetDescriptor {
@@ -19,7 +19,7 @@ function normalizedRelative(root: string, targetPath: string): string | undefine
 }
 
 function matchesAny(value: string, patterns: readonly string[]): boolean {
-  return patterns.some((pattern) => minimatch(value, pattern, { dot: true, nocase: false }));
+  return patterns.some((pattern) => globMatches(value, pattern, { dot: true, nocase: false }));
 }
 
 function intersects(values: readonly string[], patterns: readonly string[]): boolean {

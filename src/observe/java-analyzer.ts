@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
+import { MAX_ANALYZED_FILE_BYTES } from "./limits.js";
+import { classificationPath } from "./repository-path.js";
 import type {
   JavaDeclarationKind,
   JavaFileFacts,
@@ -40,7 +42,7 @@ function uniqueSorted(values: Iterable<string>): string[] {
 export function stripJavaComments(source: string): string {
   let output = "";
   let index = 0;
-  let state: "code" | "line-comment" | "block-comment" | "string" | "char" = "code";
+  let state: "code" | "line-comment" | "block-comment" | "string" | "char" | "text-block" = "code";
 
   while (index < source.length) {
     const char = source[index] ?? "";
@@ -59,6 +61,15 @@ export function stripJavaComments(source: string): string {
         index += 2;
         continue;
       }
+      // A text block (Java 15+) is one string whose content may contain quotes, // and /*.
+      // Treating its three quotes as an empty string plus an opening quote makes the state depend on
+      // the parity of the quotes inside, which corrupts everything after the block.
+      if (char === '"' && next === '"' && source[index + 2] === '"') {
+        state = "text-block";
+        output += '"""';
+        index += 3;
+        continue;
+      }
       if (char === '"') state = "string";
       if (char === "'") state = "char";
       output += char;
@@ -66,10 +77,28 @@ export function stripJavaComments(source: string): string {
       continue;
     }
 
-    if (state === "line-comment") {
-      if (char === "\n") {
+    if (state === "text-block") {
+      if (char === "\\") {
+        output += char + next; // an escape, including an escaped quote
+        index += 2;
+        continue;
+      }
+      if (char === '"' && next === '"' && source[index + 2] === '"') {
         state = "code";
-        output += "\n";
+        output += '"""';
+        index += 3;
+        continue;
+      }
+      output += char;
+      index += 1;
+      continue;
+    }
+
+    if (state === "line-comment") {
+      // Java ends a line comment at LF, CR or CRLF.
+      if (char === "\n" || char === "\r") {
+        state = "code";
+        output += char;
       } else {
         output += " ";
       }
@@ -83,7 +112,7 @@ export function stripJavaComments(source: string): string {
         output += "  ";
         index += 2;
       } else {
-        output += char === "\n" ? "\n" : " ";
+        output += char === "\n" || char === "\r" ? char : " ";
         index += 1;
       }
       continue;
@@ -106,12 +135,18 @@ export function stripJavaComments(source: string): string {
 export function maskJavaStrings(sourceWithoutComments: string): string {
   let output = "";
   let index = 0;
-  let state: "code" | "string" | "char" = "code";
+  let state: "code" | "string" | "char" | "text-block" = "code";
 
   while (index < sourceWithoutComments.length) {
     const char = sourceWithoutComments[index] ?? "";
     const next = sourceWithoutComments[index + 1] ?? "";
     if (state === "code") {
+      if (char === '"' && next === '"' && sourceWithoutComments[index + 2] === '"') {
+        state = "text-block";
+        output += '"""';
+        index += 3;
+        continue;
+      }
       if (char === '"') {
         state = "string";
         output += '"';
@@ -121,6 +156,24 @@ export function maskJavaStrings(sourceWithoutComments: string): string {
       } else {
         output += char;
       }
+      index += 1;
+      continue;
+    }
+
+    if (state === "text-block") {
+      if (char === "\\") {
+        const width = Math.min(2, sourceWithoutComments.length - index);
+        output += " ".repeat(width);
+        index += width;
+        continue;
+      }
+      if (char === '"' && next === '"' && sourceWithoutComments[index + 2] === '"') {
+        state = "code";
+        output += '"""';
+        index += 3;
+        continue;
+      }
+      output += char === "\n" || char === "\r" ? char : " ";
       index += 1;
       continue;
     }
@@ -137,7 +190,7 @@ export function maskJavaStrings(sourceWithoutComments: string): string {
       state = "code";
       output += "'";
     } else {
-      output += char === "\n" ? "\n" : " ";
+      output += char === "\n" || char === "\r" ? char : " ";
     }
     index += 1;
   }
@@ -145,9 +198,9 @@ export function maskJavaStrings(sourceWithoutComments: string): string {
   return output;
 }
 
-export function detectJavaRole(path: string, source = ""): RoleDetection {
+export function detectJavaRole(path: string, source = "", repositoryRoot?: string): RoleDetection {
   const fileName = basename(path);
-  const normalizedPath = path.replaceAll("\\", "/").toLowerCase();
+  const normalizedPath = classificationPath(path, repositoryRoot).toLowerCase();
   const packageRole: JavaRole | undefined =
     /\/(?:model\/)?request\//.test(normalizedPath)
       ? "request-dto"
@@ -174,8 +227,8 @@ export function detectJavaRole(path: string, source = ""): RoleDetection {
   return { role: "unknown", confidence: "low" };
 }
 
-export function detectSourceKind(path: string): SourceKind {
-  const normalized = path.replaceAll("\\", "/").toLowerCase();
+export function detectSourceKind(path: string, repositoryRoot?: string): SourceKind {
+  const normalized = classificationPath(path, repositoryRoot).toLowerCase();
   if (normalized.includes("/src/main/")) return "production";
   if (normalized.includes("/src/test/") || normalized.includes("/test/")) return "test";
   return "unknown";
@@ -216,23 +269,28 @@ function dtoNamingPattern(fileName: string): string {
   return "other";
 }
 
-function isGeneratedJava(path: string, source: string, annotations: readonly string[]): boolean {
+function isGeneratedJava(
+  path: string,
+  source: string,
+  annotations: readonly string[],
+  repositoryRoot?: string,
+): boolean {
   const header = source.slice(0, 2_000);
   return (
     annotations.includes("Generated") ||
-    /[/\\](?:generated|target|build)[/\\]/i.test(path) ||
+    /[/\\](?:generated|target|build)[/\\]/i.test(classificationPath(path, repositoryRoot)) ||
     /\bGenerated by\b[\s\S]{0,160}\bDO NOT EDIT\b/i.test(header) ||
     /\bDO NOT EDIT\b[\s\S]{0,160}\bgenerated\b/i.test(header)
   );
 }
 
-export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
+export function analyzeJavaSource(path: string, source: string, repositoryRoot?: string): JavaFileFacts {
   const stat = statSync(path);
   const clean = stripJavaComments(source);
   const structural = maskJavaStrings(clean);
-  const role = detectJavaRole(path, source);
+  const role = detectJavaRole(path, source, repositoryRoot);
   const packageName = structural.match(/\bpackage\s+([\w.]+)\s*;/)?.[1];
-  const imports = uniqueSorted(matchAll(structural, /^\s*import\s+(?:static\s+)?([\w.*]+)\s*;/gm));
+  const imports = uniqueSorted(matchAll(structural, /^[^\S\r\n]*import\s+(?:static\s+)?([\w.*]+)\s*;/gm));
   const annotations = uniqueSorted(matchAll(structural, /@([A-Za-z_$][\w$]*)\b/g));
   const superTypes = uniqueSorted(
     matchAll(
@@ -250,7 +308,8 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
   const dependencyTypes = matchAll(structural, dependencyField);
   const hasDependencyFields = dependencyTypes.length > 0;
 
-  const constructorPattern = new RegExp(`\\b${className}\\s*\\(([^)]*)\\)`, "g");
+  // The negated classes below are bounded: an unbounded `[^)]*` rescans to EOF from every unclosed `Name(`.
+  const constructorPattern = new RegExp(`\\b${className}\\s*\\(([^)]{0,600})\\)`, "g");
   const constructors = matchAll(structural, constructorPattern);
   if (constructors.some((params) => /(?:Service|Mapper|Repository|Client|Gateway)\b/.test(params))) {
     addSignal(signals, "dependency-injection", "constructor");
@@ -259,7 +318,7 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
     addSignal(signals, "dependency-injection", "constructor-lombok");
   }
   if (
-    /@(?:Autowired|Resource|Inject)\b[\s\S]{0,180}?\b(?:private|protected|public)\s+(?:final\s+)?\w+[<\w, ?.$>]*\s+\w+\s*;/.test(
+    /@(?:Autowired|Resource|Inject)\b[\s\S]{0,180}?\b(?:private|protected|public)\s+(?:final\s+)?\w+[<\w, ?.$>]{0,200}\s+\w+\s*;/.test(
       structural,
     )
   ) {
@@ -294,17 +353,17 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
     }
   }
 
-  if (/@Transactional(?:\s*\([^)]*\))?\s*(?:public\s+)?(?:class|interface)\b/.test(structural)) {
+  if (/@Transactional(?:\s*\([^()]*\))?\s*(?:public\s+)?(?:class|interface)\b/.test(structural)) {
     addSignal(signals, "transaction-placement", "class");
   }
-  if (/@Transactional(?:\s*\([^)]*\))?\s*(?:public|protected|private)\b/.test(structural)) {
+  if (/@Transactional(?:\s*\([^()]*\))?\s*(?:public|protected|private)\b/.test(structural)) {
     addSignal(signals, "transaction-placement", "method");
   }
 
   for (const exceptionType of matchAll(structural, /\bthrow\s+new\s+([A-Z][\w$]*Exception)\s*\(/g)) {
     addSignal(signals, "exception-type", exceptionType);
   }
-  for (const match of structural.matchAll(/\bthrow\s+new\s+([A-Z][\w$]*Exception)\s*\(([^;]*)\)/g)) {
+  for (const match of structural.matchAll(/\bthrow\s+new\s+([A-Z][\w$]*Exception)\s*\(([^;]{0,1000})\)/g)) {
     const exceptionType = match[1];
     const args = match[2];
     if (exceptionType && args && /\b\w*ErrorCode\s*\./.test(args)) {
@@ -321,14 +380,14 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
   if (imports.some((value) => value.startsWith("java.util.logging."))) {
     addSignal(signals, "logging-framework", "jul");
   }
-  if (/\b(?:log|logger)\.(?:trace|debug|info|warn|error)\s*\(\s*"[^"\n]*\{\}[^"\n]*"\s*,/i.test(clean)) {
+  if (/\b(?:log|logger)\.(?:trace|debug|info|warn|error)\s*\(\s*"[^"\n]{0,400}\{\}[^"\n]{0,400}"\s*,/i.test(clean)) {
     addSignal(signals, "logging-style", "parameterized");
   }
   if (/\b(?:log|logger)\.(?:trace|debug|info|warn|error)\s*\(\s*"[^"\n]*"\s*\+/i.test(clean)) {
     addSignal(signals, "logging-style", "concatenated");
   }
 
-  const methodPattern = /\b(?:public|protected)\s+(?:static\s+)?(?:final\s+)?([A-Z][\w$]*(?:\s*<[^;{}()]+>)?)\s+\w+\s*\(/g;
+  const methodPattern = /\b(?:public|protected)\s+(?:static\s+)?(?:final\s+)?([A-Z][\w$]*(?:\s*<[^;{}()]{1,400}>)?)\s+\w+\s*\(/g;
   for (const returnType of matchAll(structural, methodPattern)) {
     const outer = outerType(returnType);
     if (/^(?:ResponseEntity|Result|ApiResponse|CommonResult|Page|PageResult|Optional)$/.test(outer)) {
@@ -363,7 +422,7 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
     ...(declarationKind ? { declarationKind } : {}),
     role: role.role,
     roleConfidence: role.confidence,
-    sourceKind: detectSourceKind(path),
+    sourceKind: detectSourceKind(path, repositoryRoot),
     annotations,
     imports,
     superTypes,
@@ -373,11 +432,15 @@ export function analyzeJavaSource(path: string, source: string): JavaFileFacts {
     size: stat.size,
     mtimeMs: stat.mtimeMs,
     contentHash: createHash("sha256").update(source).digest("hex"),
-    generated: isGeneratedJava(path, source, annotations),
+    generated: isGeneratedJava(path, source, annotations, repositoryRoot),
     deprecated: annotations.includes("Deprecated"),
   };
 }
 
-export function analyzeJavaFile(path: string): JavaFileFacts {
-  return analyzeJavaSource(path, readFileSync(path, "utf8"));
+export function analyzeJavaFile(path: string, repositoryRoot?: string): JavaFileFacts {
+  const size = statSync(path).size;
+  if (size > MAX_ANALYZED_FILE_BYTES) {
+    throw new Error(`Source file too large to analyze (${size} bytes > ${MAX_ANALYZED_FILE_BYTES})`);
+  }
+  return analyzeJavaSource(path, readFileSync(path, "utf8"), repositoryRoot);
 }

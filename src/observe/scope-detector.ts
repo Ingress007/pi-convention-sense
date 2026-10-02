@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
+import { isPathInside } from "../runtime/paths.js";
 import type { ConventionScope, JavaFileFacts, ScopeConfidence } from "./types.js";
 
 const BUILD_FILES = ["pom.xml", "build.gradle", "build.gradle.kts"];
@@ -19,11 +20,6 @@ const ROLE_PACKAGE_SEGMENTS = new Set([
 ]);
 const GENERIC_PACKAGE_SEGMENTS = new Set(["com", "org", "net", "io", "java", "src", "main", "impl"]);
 
-function isInside(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
-
 function findSourceRoot(path: string): string | undefined {
   const normalized = resolve(path);
   const parts = normalized.split(sep);
@@ -38,7 +34,7 @@ function findSourceRoot(path: string): string | undefined {
 function findNearestBuildRoot(filePath: string, repositoryRoot: string): string | undefined {
   let current = dirname(filePath);
   const root = resolve(repositoryRoot);
-  while (isInside(root, current)) {
+  while (isPathInside(root, current, { allowEqual: true })) {
     if (BUILD_FILES.some((name) => existsSync(resolve(current, name)))) return current;
     if (current === root) break;
     const parent = dirname(current);

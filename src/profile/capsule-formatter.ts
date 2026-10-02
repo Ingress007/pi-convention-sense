@@ -1,5 +1,6 @@
 import { relative, resolve, sep } from "node:path";
 import { estimateTokens } from "../observe/snapshot-formatter.js";
+import { escapeXml } from "../runtime/xml.js";
 import type { ResolvedProjectContext } from "./types.js";
 
 export interface FormattedKnowledgeCapsule {
@@ -8,15 +9,6 @@ export interface FormattedKnowledgeCapsule {
   includedKnowledgeIds: string[];
   includedConventionIds: string[];
   truncated: boolean;
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
 }
 
 function displayPath(repositoryRoot: string, path: string): string {

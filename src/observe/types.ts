@@ -150,7 +150,12 @@ export interface AnalyzeTargetResult {
     | "target-excluded"
     | "scope-unknown"
     | "analysis-error";
+  /** The error message. For callers and tests only: it is never logged because messages can embed paths or text. */
   error?: string;
+  /** What may be logged about a failed analysis: the error class, its code and where it was thrown. */
+  errorName?: string;
+  errorCode?: string;
+  errorLocation?: string;
   durationMs: number;
   indexedFileCount: number;
   consideredCandidateCount: number;

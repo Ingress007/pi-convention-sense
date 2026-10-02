@@ -1,11 +1,7 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { isPathInside } from "../runtime/paths.js";
 import type { ConventionScope, ScopeConfidence, TypeScriptFileFacts } from "./types.js";
-
-function isInside(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
 
 function combineConfidence(role: ScopeConfidence, module: ScopeConfidence): ScopeConfidence {
   if (role === "low" || module === "low") return "low";
@@ -22,7 +18,8 @@ function workspaceBoundary(
   const segments = rel.split(sep).filter(Boolean);
   const index = segments.findIndex((segment) => ["apps", "packages"].includes(segment.toLowerCase()));
   const name = index >= 0 ? segments[index + 1] : undefined;
-  if (index < 0 || !name) return undefined;
+  // The name must be a directory: `packages/loose.ts` is a file next to the packages, not a package called "loose.ts".
+  if (index < 0 || !name || index + 2 >= segments.length) return undefined;
   const family = segments[index]?.toLowerCase();
   return {
     module: `${family}:${name}`,
@@ -33,7 +30,7 @@ function workspaceBoundary(
 function nearestPackageRoot(targetPath: string, repositoryRoot: string): string | undefined {
   const repo = resolve(repositoryRoot);
   let current = dirname(targetPath);
-  while (isInside(repo, current)) {
+  while (isPathInside(repo, current, { allowEqual: true })) {
     if (existsSync(resolve(current, "package.json"))) return current;
     if (current === repo) break;
     const parent = dirname(current);

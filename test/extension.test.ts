@@ -1,91 +1,18 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import test, { afterEach } from "node:test";
 import { registerConventionSenseSpike } from "../extensions/index.js";
+import { MAX_ANALYZED_FILE_BYTES } from "../src/observe/limits.js";
 import { loadProjectProfile } from "../src/profile/profile-loader.js";
+import { isCaseInsensitivePlatform } from "../src/runtime/path-key.js";
 import { SPIKE_STATE_ENTRY_TYPE } from "../src/runtime/types.js";
+import { assertNoSwallowedHandlerErrors, createHarness, type Harness } from "./support/fake-pi.js";
 
-type Handler = (event: any, ctx: any) => any;
-
-interface Harness {
-  api: ExtensionAPI;
-  handlers: Map<string, Handler[]>;
-  commands: Map<string, (args: string, ctx: any) => Promise<void>>;
-  branchEntries: any[];
-  notifications: string[];
-  statuses: Array<string | undefined>;
-  ctx: ExtensionContext;
-  invoke(event: string, payload: any): Promise<any>;
-}
-
-function createHarness(cwd: string): Harness {
-  const handlers = new Map<string, Handler[]>();
-  const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
-  const branchEntries: any[] = [];
-  const notifications: string[] = [];
-  const statuses: Array<string | undefined> = [];
-
-  const api = {
-    on(event: string, handler: Handler) {
-      const current = handlers.get(event) ?? [];
-      current.push(handler);
-      handlers.set(event, current);
-    },
-    appendEntry(customType: string, data: unknown) {
-      branchEntries.push({ type: "custom", customType, data });
-    },
-    registerCommand(name: string, options: { handler: (args: string, ctx: any) => Promise<void> }) {
-      commands.set(name, options.handler);
-    },
-  } as unknown as ExtensionAPI;
-
-  const sessionManager = {
-    getSessionId: () => "session-1",
-    getSessionFile: () => join(cwd, "session.jsonl"),
-    getLeafId: () => "leaf-1",
-    getBranch: () => branchEntries,
-  };
-
-  const ctx = {
-    cwd,
-    mode: "tui",
-    hasUI: true,
-    isProjectTrusted: () => true,
-    isIdle: () => true,
-    sessionManager,
-    ui: {
-      notify(message: string) {
-        notifications.push(message);
-      },
-      setStatus(_key: string, value: string | undefined) {
-        statuses.push(value);
-      },
-    },
-  } as unknown as ExtensionContext;
-
-  return {
-    api,
-    handlers,
-    commands,
-    branchEntries,
-    notifications,
-    statuses,
-    ctx,
-    async invoke(event: string, payload: any): Promise<any> {
-      let result: any;
-      for (const handler of handlers.get(event) ?? []) {
-        const next = await handler(payload, ctx);
-        if (next !== undefined) result = next;
-      }
-      return result;
-    },
-  };
-}
+afterEach(assertNoSwallowedHandlerErrors);
 
 function javaTarget(root = ""): string {
   return join(
@@ -223,7 +150,11 @@ test("Guard blocks a pending read, releases confirmed no-peer targets, and keeps
     details: undefined,
     isError: false,
   });
-  assert.ok(harness.branchEntries.some((entry) => entry.customType === SPIKE_STATE_ENTRY_TYPE));
+  assert.equal(
+    harness.branchEntries.some((entry) => entry.customType === SPIKE_STATE_ENTRY_TYPE),
+    false,
+    "the checkpoint is flushed when the run settles, not after every tool result",
+  );
   assert.equal(runtime.getSnapshotCache().list()[0]?.status, "weak");
 
   const allowedNoPeers = await harness.invoke("tool_call", {
@@ -253,6 +184,7 @@ test("Guard blocks a pending read, releases confirmed no-peer targets, and keeps
     isError: false,
   });
   await harness.invoke("agent_settled", { type: "agent_settled" });
+  assert.ok(harness.branchEntries.some((entry) => entry.customType === SPIKE_STATE_ENTRY_TYPE));
 
   const log = readFileSync(join(cwd, ".pi", "convention-sense", "observe.ndjson"), "utf8");
   assert.doesNotMatch(log, /SECRET_SOURCE_CONTENT|SECRET_WRITE_CONTENT|SECRET_COMMAND/);
@@ -397,6 +329,7 @@ test("Observe extension builds, injects, and branch-rebuilds a real Java Snapsho
   assert.equal(decision, undefined);
   assert.equal(runtime.getState().guardCounters.allow, 1);
 
+  await harness.invoke("agent_settled", { type: "agent_settled" });
   const firstBranch = harness.branchEntries.slice();
   const paymentTarget = target.replace("OrderServiceImpl.java", "PaymentServiceImpl.java");
   await harness.invoke("tool_result", {
@@ -493,6 +426,7 @@ test("Practice suggest mode injects bounded advisory questions without changing 
   assert.match(log, /practice\.transaction-side-effect/);
   assert.doesNotMatch(log, /notificationGateway\.publish|partial failure/);
 
+  await harness.invoke("agent_settled", { type: "agent_settled" });
   const activeBranch = [...harness.branchEntries];
   harness.branchEntries.splice(0);
   await harness.invoke("session_tree", {
@@ -1384,4 +1318,396 @@ test("external repository Profile is ignored even when the startup project is tr
   const log = readFileSync(join(cwd, ".pi", "convention-sense", "observe.ndjson"), "utf8");
   assert.match(log, /"profileStatus":"ignored"/);
   assert.match(log, /Project Profile exists but was ignored because the project is not trusted/);
+});
+
+test("unexpected handler exceptions fail open in every mode and are logged without error text", async () => {
+  for (const mode of ["observe", "guard"] as const) {
+    const cwd = mkdtempSync(join(tmpdir(), `pi-convention-failopen-${mode}-`));
+    cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+    writeGuardConfig(cwd, { mode });
+    const target = javaTarget();
+    const harness = createHarness(cwd);
+    harness.allowHandlerErrors = true;
+    const runtime = registerConventionSenseSpike(harness.api);
+    await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+    await harness.invoke("tool_result", {
+      type: "tool_result",
+      toolCallId: "read-target",
+      toolName: "read",
+      input: { path: target },
+      content: [],
+      details: undefined,
+      isError: false,
+    });
+    await harness.invoke("context", { type: "context", messages: [] });
+
+    // A transient filesystem error (for example EBUSY on Windows) inside Snapshot freshness checks.
+    const cache = runtime.getSnapshotCache();
+    cache.getFresh = () => {
+      throw Object.assign(new Error("EBUSY SECRET_ERROR_TEXT"), { code: "EBUSY" });
+    };
+
+    // Pi's runner has no try/catch around tool_call: a throw there would block the user's edit.
+    const edit = await harness.invoke("tool_call", {
+      type: "tool_call",
+      toolCallId: `edit-${mode}`,
+      toolName: "edit",
+      input: { path: target, edits: [{ oldText: "a", newText: "b" }] },
+    });
+    assert.equal(edit, undefined, `${mode}: an analysis exception must never block edit/write`);
+
+    const context = await harness.invoke("context", { type: "context", messages: [] });
+    assert.equal(context, undefined, `${mode}: a failing context handler must leave messages unchanged`);
+    await harness.invoke("tool_execution_start", {
+      type: "tool_execution_start",
+      toolCallId: `bash-${mode}`,
+      toolName: "bash",
+      args: { command: "printf x > out.txt" },
+    });
+
+    const log = readFileSync(join(cwd, ".pi", "convention-sense", "observe.ndjson"), "utf8");
+    assert.match(log, /"event":"handler_error"/);
+    for (const handlerEvent of ["tool_call", "context", "tool_execution_start"]) {
+      assert.match(log, new RegExp(`"handlerEvent":"${handlerEvent}"`), `${mode}: missing handler_error for ${handlerEvent}`);
+    }
+    assert.match(log, /"errorCode":"EBUSY"/);
+    assert.doesNotMatch(log, /SECRET_ERROR_TEXT/, "error messages can embed source text and must not be logged");
+  }
+});
+
+test(
+  "Guard accepts drive-letter and case variants of a path that was read",
+  { skip: !isCaseInsensitivePlatform() },
+  async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-convention-pathcase-"));
+    cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+    writeGuardConfig(cwd);
+    const absolute = resolve(cwd, javaTarget());
+    const harness = createHarness(cwd);
+    const runtime = registerConventionSenseSpike(harness.api);
+    await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+    await harness.invoke("tool_result", {
+      type: "tool_result",
+      toolCallId: "read-original",
+      toolName: "read",
+      input: { path: absolute },
+      content: [],
+      details: undefined,
+      isError: false,
+    });
+    await harness.invoke("context", { type: "context", messages: [] });
+
+    const flippedDrive = absolute.replace(/^([A-Za-z]):/, (_match, letter: string) =>
+      letter === letter.toUpperCase() ? `${letter.toLowerCase()}:` : `${letter.toUpperCase()}:`,
+    );
+    const variants: Record<string, string> = {
+      "same spelling": absolute,
+      "flipped drive letter": flippedDrive,
+      "different file name case": absolute.replace("OrderServiceImpl", "orderserviceimpl"),
+      "forward slashes": absolute.replaceAll("\\", "/"),
+    };
+    for (const [name, path] of Object.entries(variants)) {
+      const decision = await harness.invoke("tool_call", {
+        type: "tool_call",
+        toolCallId: `edit-${name}`,
+        toolName: "edit",
+        input: { path, edits: [{ oldText: "a", newText: "b" }] },
+      });
+      assert.equal(decision, undefined, `"${name}" must be recognized as the file that was read`);
+    }
+    assert.equal(runtime.getState().successfulReads.size, 1);
+  },
+);
+
+test("a project config cannot redirect the log outside the plugin state directory", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "pi-convention-logpath-"));
+  const cwd = join(parent, "project");
+  mkdirSync(join(cwd, ".pi"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi", "convention-sense.json"),
+    JSON.stringify({ mode: "observe", logPath: "../escaped.ndjson" }),
+  );
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+
+  assert.equal(existsSync(join(parent, "escaped.ndjson")), false);
+  assert.equal(runtime.getLogger().filePath, resolve(cwd, ".pi", "convention-sense", "observe.ndjson"));
+  assert.ok(existsSync(runtime.getLogger().filePath));
+  assert.ok(runtime.getLoadedConfig().diagnostics.some((message) => /logPath/.test(message)));
+});
+
+function countCheckpoints(harness: Harness): number {
+  return harness.branchEntries.filter((entry) => entry.customType === SPIKE_STATE_ENTRY_TYPE).length;
+}
+
+async function readFile(harness: Harness, cwd: string, name: string, id: string): Promise<void> {
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: id,
+    toolName: "read",
+    input: { path: join(cwd, "src", "main", "java", "com", "acme", "pkg", name) },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+}
+
+test("the checkpoint is appended once per agent run, on shutdown, and only when state changed", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-checkpoint-"));
+  const harness = createHarness(cwd);
+  registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+
+  for (let index = 0; index < 30; index += 1) await readFile(harness, cwd, `File${index}.java`, `r${index}`);
+  assert.equal(countCheckpoints(harness), 0, "tool results must not append a full checkpoint each");
+
+  await harness.invoke("agent_settled", { type: "agent_settled" });
+  assert.equal(countCheckpoints(harness), 1);
+  await harness.invoke("agent_settled", { type: "agent_settled" });
+  assert.equal(countCheckpoints(harness), 1, "an unchanged ledger must not append another checkpoint");
+
+  await readFile(harness, cwd, "Late.java", "late");
+  await harness.invoke("session_shutdown", { type: "session_shutdown", reason: "quit" });
+  assert.equal(countCheckpoints(harness), 2, "pending changes are flushed on shutdown");
+  const last = harness.branchEntries.filter((entry) => entry.customType === SPIKE_STATE_ENTRY_TYPE).at(-1);
+  assert.equal(last.data.successfulReads.length, 31);
+});
+
+test("checkpoint growth stays bounded across a long session", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-checkpoint-size-"));
+  const harness = createHarness(cwd);
+  registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+
+  for (let run = 0; run < 25; run += 1) {
+    for (let index = 0; index < 20; index += 1) {
+      await readFile(harness, cwd, `File${run * 20 + index}.java`, `r${run}-${index}`);
+    }
+    await harness.invoke("agent_settled", { type: "agent_settled" });
+  }
+
+  const bytes = harness.branchEntries.reduce((total, entry) => total + JSON.stringify(entry).length, 0);
+  assert.ok(bytes < 2 * 1024 * 1024, `500 reads wrote ${(bytes / 1024 / 1024).toFixed(2)} MiB of checkpoints`);
+  const last = harness.branchEntries.filter((entry) => entry.customType === SPIKE_STATE_ENTRY_TYPE).at(-1);
+  assert.ok(last.data.successfulReads.length <= 300);
+  assert.ok(last.data.recentReads.length <= 100);
+});
+
+test("a symlinked default log file is never written through, even while the extension keeps working", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-logsymlink-"));
+  const outside = join(mkdtempSync(join(tmpdir(), "pi-convention-outside-")), "outside.txt");
+  writeFileSync(outside, "ORIGINAL\n");
+  mkdirSync(join(cwd, ".pi", "convention-sense"), { recursive: true });
+  try {
+    symlinkSync(outside, join(cwd, ".pi", "convention-sense", "observe.ndjson"), "file");
+  } catch {
+    t.skip("file symlinks cannot be created here");
+    return;
+  }
+
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "read-1",
+    toolName: "read",
+    input: { path: join(cwd, "A.java") },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  await harness.invoke("agent_settled", { type: "agent_settled" });
+
+  assert.equal(readFileSync(outside, "utf8"), "ORIGINAL\n");
+  assert.equal(runtime.getLogger().level, "silent");
+  assert.equal(runtime.getState().successfulReads.size, 1, "the ledger keeps working without a log");
+});
+
+test("a controlled edit does not rescan the repository, but writing a new source file does", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-index-"));
+  cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+  writeGuardConfig(cwd, { mode: "observe" });
+  const absolute = resolve(cwd, javaTarget());
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+  const toolResult = (toolName: string, input: Record<string, unknown>, id: string) =>
+    harness.invoke("tool_result", { type: "tool_result", toolCallId: id, toolName, input, content: [], details: undefined, isError: false });
+
+  await toolResult("read", { path: absolute }, "read-1");
+  assert.equal(runtime.getAnalyzer().indexBuildCount, 1);
+
+  writeFileSync(absolute, `${readFileSync(absolute, "utf8")}\n// edited\n`);
+  await toolResult("edit", { path: absolute, edits: [{ oldText: "a", newText: "b" }] }, "edit-1");
+  await harness.invoke("context", { type: "context", messages: [] }); // re-analyzes the now-stale Snapshot
+  assert.equal(runtime.getAnalyzer().indexBuildCount, 1, "an edit never changes the set of files");
+
+  const created = join(absolute, "..", "ShippingServiceImpl.java");
+  writeFileSync(created, "package com.acme.order.service.impl; public class ShippingServiceImpl implements ShippingService {}\n");
+  await toolResult("write", { path: created, content: "x" }, "write-1");
+  await toolResult("read", { path: absolute }, "read-2");
+  assert.equal(runtime.getAnalyzer().indexBuildCount, 2, "a created file invalidates the index");
+  assert.ok(
+    runtime.getSnapshotCache().get(absolute)?.candidates.some((candidate) => candidate.path.endsWith("ShippingServiceImpl.java")),
+    "the new file is a peer candidate",
+  );
+});
+
+async function conventionStatus(harness: Harness): Promise<string> {
+  const command = harness.commands.get("convention-status");
+  assert.ok(command);
+  await command("", harness.ctx);
+  return harness.notifications.at(-1) ?? "";
+}
+
+test("convention-status shows trust and enabled languages, and hints when a web project is not analyzed", async () => {
+  // A web project with the default config: Java only, so TypeScript/Vue silently do nothing.
+  const web = mkdtempSync(join(tmpdir(), "pi-convention-status-web-"));
+  writeFileSync(join(web, "package.json"), '{"name":"web","dependencies":{"vue":"3.4.0"}}');
+  const webHarness = createHarness(web);
+  registerConventionSenseSpike(webHarness.api);
+  await webHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  const webStatus = await conventionStatus(webHarness);
+  assert.match(webStatus, /project-trusted=true/);
+  assert.match(webStatus, /languages=java(\n|$)/);
+  assert.match(webStatus, /hint=package\.json found but TypeScript\/Vue analysis is off/);
+
+  // The same project once TypeScript/Vue are enabled: no hint.
+  const enabled = mkdtempSync(join(tmpdir(), "pi-convention-status-enabled-"));
+  writeFileSync(join(enabled, "package.json"), '{"name":"web","dependencies":{"vue":"3.4.0"}}');
+  writeGuardConfig(enabled, { mode: "observe", includeLanguages: ["java", "typescript", "vue"] });
+  const enabledHarness = createHarness(enabled);
+  registerConventionSenseSpike(enabledHarness.api);
+  await enabledHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  const enabledStatus = await conventionStatus(enabledHarness);
+  assert.match(enabledStatus, /languages=java,typescript,vue/);
+  assert.doesNotMatch(enabledStatus, /hint=/);
+
+  // A Java project has nothing to hint about.
+  const java = mkdtempSync(join(tmpdir(), "pi-convention-status-java-"));
+  writeFileSync(join(java, "pom.xml"), "<project/>");
+  const javaHarness = createHarness(java);
+  registerConventionSenseSpike(javaHarness.api);
+  await javaHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  assert.doesNotMatch(await conventionStatus(javaHarness), /hint=/);
+
+  // A Java project whose package.json only serves tooling (husky, commitlint) is not a web project.
+  const tooling = mkdtempSync(join(tmpdir(), "pi-convention-status-tooling-"));
+  writeFileSync(join(tooling, "pom.xml"), "<project/>");
+  writeFileSync(join(tooling, "package.json"), '{"devDependencies":{"husky":"9.0.0","@commitlint/cli":"19.0.0"}}');
+  const toolingHarness = createHarness(tooling);
+  registerConventionSenseSpike(toolingHarness.api);
+  await toolingHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  assert.doesNotMatch(await conventionStatus(toolingHarness), /hint=/, "no evidence of web sources, no hint");
+
+  // A tsconfig.json next to the package.json is evidence enough.
+  const typed = mkdtempSync(join(tmpdir(), "pi-convention-status-typed-"));
+  writeFileSync(join(typed, "package.json"), '{"name":"lib"}');
+  writeFileSync(join(typed, "tsconfig.json"), "{}");
+  const typedHarness = createHarness(typed);
+  registerConventionSenseSpike(typedHarness.api);
+  await typedHarness.invoke("session_start", { type: "session_start", reason: "startup" });
+  assert.match(await conventionStatus(typedHarness), /hint=package\.json found but TypeScript\/Vue analysis is off/);
+});
+
+test("convention-status says when the project config was ignored because the project is not trusted", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-status-untrusted-"));
+  writeGuardConfig(cwd, { mode: "guard" });
+  const harness = createHarness(cwd, { trusted: false });
+  harness.allowHandlerErrors = false;
+  registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+  const status = await conventionStatus(harness);
+  assert.match(status, /project-trusted=false/);
+  assert.match(status, /config-source=defaults/);
+  assert.match(status, /ignored because the project is not trusted/);
+});
+
+test("Guard fails open for an oversized target instead of analyzing it or blocking", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-huge-"));
+  cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+  writeGuardConfig(cwd, { mode: "guard" });
+  const absolute = resolve(cwd, javaTarget());
+  writeFileSync(
+    absolute,
+    `package com.acme.order.service.impl;\npublic class OrderServiceImpl implements OrderService {}\n// ${"x".repeat(MAX_ANALYZED_FILE_BYTES)}\n`,
+  );
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+  await harness.invoke("tool_result", {
+    type: "tool_result",
+    toolCallId: "read-huge",
+    toolName: "read",
+    input: { path: absolute },
+    content: [],
+    details: undefined,
+    isError: false,
+  });
+  assert.equal(runtime.getSnapshotCache().list().length, 0, "no Snapshot for an oversized file");
+
+  const decision = await harness.invoke("tool_call", {
+    type: "tool_call",
+    toolCallId: "edit-huge",
+    toolName: "edit",
+    input: { path: absolute, edits: [{ oldText: "a", newText: "b" }] },
+  });
+  assert.equal(decision, undefined, "an oversized target must never be blocked");
+  const log = readFileSync(join(cwd, ".pi", "convention-sense", "observe.ndjson"), "utf8");
+  assert.match(log, /"reasonCode":"ANALYSIS_FAILED_OPEN"/);
+
+  // Why the analysis failed is logged as a classification, never as the error message (messages can embed paths or text).
+  const skipped = log.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((record) => record.event === "snapshot_skipped");
+  assert.ok(skipped, "the skipped analysis is logged");
+  assert.equal(skipped.payload.reason, "analysis-error");
+  assert.equal(skipped.payload.errorName, "Error");
+  assert.equal("error" in skipped.payload, false, "the raw error message must not be logged");
+  assert.doesNotMatch(log, /too large to analyze/i);
+});
+
+test("files created or deleted by a shell command refresh the repository index", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-convention-shell-index-"));
+  cpSync(resolve("test", "fixtures", "java-maven"), cwd, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd });
+  execFileSync("git", ["add", "."], { cwd });
+  execFileSync(
+    "git",
+    ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "initial"],
+    { cwd },
+  );
+  writeGuardConfig(cwd, { mode: "observe" });
+  const absolute = resolve(cwd, javaTarget());
+  const created = join(absolute, "..", "ShippingServiceImpl.java");
+  const harness = createHarness(cwd);
+  const runtime = registerConventionSenseSpike(harness.api);
+  await harness.invoke("session_start", { type: "session_start", reason: "startup" });
+
+  const read = () => harness.invoke("tool_result", {
+    type: "tool_result", toolCallId: "read", toolName: "read", input: { path: absolute }, content: [], details: undefined, isError: false,
+  });
+  const peers = () => runtime.getSnapshotCache().get(absolute)?.candidates.map((candidate) => candidate.path) ?? [];
+  // A risky shell command: Git baseline before, the real change on disk, then the audit after.
+  const shell = async (command: string, change: () => void) => {
+    await harness.invoke("tool_execution_start", { type: "tool_execution_start", toolCallId: "shell", toolName: "bash", args: { command } });
+    change();
+    await harness.invoke("tool_result", {
+      type: "tool_result", toolCallId: "shell", toolName: "bash", input: { command }, content: [], details: undefined, isError: false,
+    });
+  };
+
+  await read();
+  assert.equal(runtime.getAnalyzer().indexBuildCount, 1);
+
+  await shell("echo x > notes.txt", () => writeFileSync(created, "package com.acme.order.service.impl; public class ShippingServiceImpl implements ShippingService {}"));
+  await read();
+  assert.equal(runtime.getAnalyzer().indexBuildCount, 2, "a source file created by a shell command invalidates the index");
+  assert.ok(peers().some((path) => path.endsWith("ShippingServiceImpl.java")), "and becomes a peer candidate");
+
+  await shell("rm ShippingServiceImpl.java", () => rmSync(created));
+  await read();
+  assert.equal(runtime.getAnalyzer().indexBuildCount, 3, "a deleted source file invalidates it again");
+  assert.ok(!peers().some((path) => path.endsWith("ShippingServiceImpl.java")));
 });

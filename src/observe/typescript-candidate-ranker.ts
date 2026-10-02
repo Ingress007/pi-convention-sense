@@ -3,6 +3,7 @@ import type { LoadedProjectProfile } from "../profile/profile-loader.js";
 import { applyProjectProfileToScope, effectiveScopeRole } from "../profile/profiled-scope.js";
 import type { ConventionPack } from "../profile/types.js";
 import type { RankCandidatesResult } from "./candidate-ranker.js";
+import { foldPathCase, pathKey, samePath } from "../runtime/path-key.js";
 import {
   analyzeTypeScriptFile,
   detectTypeScriptLanguage,
@@ -48,20 +49,20 @@ function determineLevel(
   candidatePath: string,
   candidateScope: ConventionScope,
 ): 0 | 1 | 2 | 3 {
-  if (dirname(targetPath) === dirname(candidatePath)) return 0;
+  if (samePath(dirname(targetPath), dirname(candidatePath))) return 0;
   if (targetScope.module === candidateScope.module) return 1;
-  if (dirname(targetScope.root) === dirname(candidateScope.root)) return 2;
+  if (samePath(dirname(targetScope.root), dirname(candidateScope.root))) return 2;
   return 3;
 }
 
 function preliminaryScore(path: string, targetPath: string, targetScope: ConventionScope): number {
   let score = 30;
   if (sameSemanticFileSuffix(path, targetPath)) score += 50;
-  if (dirname(path) === dirname(targetPath)) score += 40;
+  if (samePath(dirname(path), dirname(targetPath))) score += 40;
   const rel = relative(targetScope.root, path);
   if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..")) score += 30;
   const targetParentName = dirname(targetPath).split(sep).at(-1);
-  if (targetParentName && dirname(path).split(sep).includes(targetParentName)) score += 10;
+  if (targetParentName && foldPathCase(dirname(path)).split(sep).includes(foldPathCase(targetParentName))) score += 10;
   return score;
 }
 
@@ -73,7 +74,7 @@ function scoreCandidate(
 ): { score: number; breakdown: CandidateScoreBreakdown } {
   const sameRole = target.role === candidate.role ? 30 : 0;
   const sameModule = targetScope.module === candidateScope.module ? 25 : 0;
-  const sameDirectory = dirname(target.path) === dirname(candidate.path) ? 15 : 0;
+  const sameDirectory = samePath(dirname(target.path), dirname(candidate.path)) ? 15 : 0;
   const primitiveSimilarity = 10 * jaccard(target.frameworkPrimitives, candidate.frameworkPrimitives);
   const exportSimilarity = 8 * jaccard(target.exportNames, candidate.exportNames);
   const nameSimilarity = sameSemanticFileSuffix(target.path, candidate.path) ? 20 : 0;
@@ -116,12 +117,15 @@ export function rankTypeScriptCandidates(options: {
 }): RankCandidatesResult {
   const target = resolve(options.targetPath);
   const prelim = options.indexedFiles
-    .filter((path) => resolve(path) !== target)
+    .filter((path) => pathKey(path) !== pathKey(target))
     .filter((path) => detectTypeScriptLanguage(path) === options.targetFacts.language)
-    .filter((path) => detectTypeScriptRole(path).role === options.targetFacts.role)
+    .filter(
+      (path) => detectTypeScriptRole(path, "", options.repositoryRoot).role === options.targetFacts.role,
+    )
     .filter(
       (path) =>
-        options.targetFacts.sourceKind !== "production" || detectTypeScriptSourceKind(path) !== "test",
+        options.targetFacts.sourceKind !== "production" ||
+        detectTypeScriptSourceKind(path, options.repositoryRoot) !== "test",
     )
     .map((path) => ({ path, score: preliminaryScore(path, target, options.targetScope) }))
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
@@ -131,7 +135,7 @@ export function rankTypeScriptCandidates(options: {
   const deepAnalysisLimit = options.deepAnalysisLimit ?? (options.targetScope.effectiveRole ? 80 : 40);
   for (const preliminary of prelim.slice(0, deepAnalysisLimit)) {
     try {
-      const facts = analyzeTypeScriptFile(preliminary.path);
+      const facts = analyzeTypeScriptFile(preliminary.path, options.repositoryRoot);
       if (
         facts.generated ||
         facts.language !== options.targetFacts.language ||

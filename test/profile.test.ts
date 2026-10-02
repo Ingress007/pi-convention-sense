@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -467,4 +467,52 @@ test("Knowledge Capsule is scoped, escaped, and bounded", () => {
   assert.match(capsule.text, /effective role: mvc-view-controller/i);
   assert.match(capsule.text, /&lt;title&gt;/);
   assert.doesNotMatch(capsule.text, /Unsafe <title>/);
+});
+
+// loadProjectProfile runs for every active path on every model request, so an unchanged file must not
+// be re-read, re-parsed and re-hashed. Same "racy clean" rule as Snapshot freshness: an equal mtime
+// and size is trusted only for a file that was already old.
+function profileProject(ageMs: number): { root: string; path: string } {
+  const root = tempProject();
+  const path = writeProjectFile(root, ".convention-sense/profile.json", readFileSync(resolve(".convention-sense", "profile.json"), "utf8"));
+  const when = new Date(Date.now() - ageMs);
+  utimesSync(path, when, when);
+  return { root, path };
+}
+
+test("an unchanged Profile file is parsed once", () => {
+  const { root } = profileProject(60 * 60 * 1000);
+  const first = loadProjectProfile(root, true);
+  assert.equal(first.status, "loaded");
+  assert.equal(loadProjectProfile(root, true), first, "the second load is served from the cache");
+});
+
+test("a changed Profile file is re-read, and trust is decided before the cache", () => {
+  const { root, path } = profileProject(60 * 60 * 1000);
+  const first = loadProjectProfile(root, true);
+  assert.equal(loadProjectProfile(root, false).status, "ignored", "an untrusted project never sees the cached Profile");
+  assert.equal(loadProjectProfile(root, true), first);
+
+  const changed = readFileSync(path, "utf8").replace(/"profileVersion": "[^"]*"/, '"profileVersion": "9.9.9-longer"');
+  writeFileSync(path, changed);
+  const second = loadProjectProfile(root, true);
+  assert.notEqual(second, first);
+  assert.notEqual(second.fingerprint, first.fingerprint);
+
+  writeFileSync(path, "{ not json");
+  assert.equal(loadProjectProfile(root, true).status, "invalid");
+});
+
+test("a recently written Profile is never served from the cache", () => {
+  const { root, path } = profileProject(0);
+  const first = loadProjectProfile(root, true);
+  const original = readFileSync(path, "utf8");
+  const before = statSync(path);
+  // Same size, same mtime: only the content differs (a rewrite inside one timestamp tick).
+  writeFileSync(path, original.replace(/"generatedBy": "agent"/, '"generatedBy": "human"'));
+  assert.equal(statSync(path).size, before.size);
+  utimesSync(path, before.atime, before.mtime);
+
+  const second = loadProjectProfile(root, true);
+  assert.notEqual(second.fingerprint, first.fingerprint, "the racy-clean rule keeps the content check for recent files");
 });

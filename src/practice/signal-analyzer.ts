@@ -13,15 +13,39 @@ import {
 
 const MAX_SOURCE_BYTES = 256 * 1024;
 
-function maskCommentsAndStrings(source: string): string {
-  const output = [...source];
-  let state: "code" | "line" | "block" | "single" | "double" | "template" = "code";
+function maskCommentsAndStrings(source: string, javaTextBlocks = false): string {
+  // UTF-16 units, like the indexes below: spreading into code points would shift every write after an emoji.
+  const output = source.split("");
+  let state: "code" | "line" | "block" | "single" | "double" | "template" | "text-block" = "code";
 
   for (let index = 0; index < source.length; index += 1) {
     const current = source[index] ?? "";
     const next = source[index + 1] ?? "";
+    if (state === "text-block") {
+      // Java text block: its content may hold quotes, comments and code-like text.
+      if (current === "\\") {
+        output[index] = " ";
+        if (index + 1 < output.length) output[index + 1] = " ";
+        index += 1;
+      } else if (current === '"' && next === '"' && source[index + 2] === '"') {
+        output[index] = " ";
+        output[index + 1] = " ";
+        output[index + 2] = " ";
+        state = "code";
+        index += 2;
+      } else if (current !== "\n" && current !== "\r") {
+        output[index] = " ";
+      }
+      continue;
+    }
     if (state === "code") {
-      if (current === "/" && next === "/") {
+      if (javaTextBlocks && current === '"' && next === '"' && source[index + 2] === '"') {
+        output[index] = " ";
+        output[index + 1] = " ";
+        output[index + 2] = " ";
+        state = "text-block";
+        index += 2;
+      } else if (current === "/" && next === "/") {
         output[index] = " ";
         output[index + 1] = " ";
         state = "line";
@@ -79,11 +103,48 @@ function maskCommentsAndStrings(source: string): string {
   return output.join("");
 }
 
+// The index of the `>` that ends an opening tag, or -1. A `>` inside a quoted attribute value does not count:
+// Vue 3.3 writes `<script setup generic="T extends Array<string>">`.
+function openingTagEnd(source: string, from: number): number {
+  let quote = "";
+  for (let index = from; index < source.length; index += 1) {
+    const char = source.charAt(index);
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+// Each search starts where the previous block ended, so an unterminated tag costs one pass instead of one per tag.
+function vueScriptBlocks(source: string): string[] {
+  const blocks: string[] = [];
+  const opening = /<script\b/gi;
+  const closing = /<\/script>/gi;
+  let cursor = 0;
+  for (;;) {
+    opening.lastIndex = cursor;
+    const open = opening.exec(source);
+    if (!open) break;
+    const tagEnd = openingTagEnd(source, open.index + open[0].length);
+    if (tagEnd < 0) break;
+    closing.lastIndex = tagEnd + 1;
+    const close = closing.exec(source);
+    if (!close) break;
+    const block = source.slice(tagEnd + 1, close.index);
+    if (block.length > 0) blocks.push(block);
+    cursor = close.index + close[0].length;
+  }
+  return blocks;
+}
+
 function sourceCode(language: ObserveLanguage, source: string): string {
-  if (language !== "vue") return maskCommentsAndStrings(source);
-  const scripts = [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
-    .flatMap((match) => match[1] ? [match[1]] : []);
-  return maskCommentsAndStrings(scripts.join("\n"));
+  if (language !== "vue") return maskCommentsAndStrings(source, language === "java");
+  return maskCommentsAndStrings(vueScriptBlocks(source).join("\n"));
 }
 
 function countMatches(source: string, pattern: RegExp): number {
@@ -135,12 +196,13 @@ export function analyzePracticeSource(
   const externalCalls = countMatches(
     code,
     language === "java"
-      ? /\b\w*(?:client|gateway|producer|publisher|sender|notifier|webhook|remote|kafka|rabbit)\w*\s*\.\s*\w+\s*\(/gi
+      // `\w*(?:keyword)\w*` is quadratic in the length of one identifier that repeats the keyword, hence the bounds.
+      ? /\b\w{0,100}(?:client|gateway|producer|publisher|sender|notifier|webhook|remote|kafka|rabbit)\w{0,100}\s*\.\s*\w+\s*\(/gi
       : /\b(?:fetch|axios(?:\.\w+)?|\w*(?:client|gateway|request|http|api))\s*(?:\.\s*\w+)?\s*\(/gi,
   );
   const persistenceCalls = countMatches(
     code,
-    /\b\w*(?:mapper|repository|repo|dao)\w*\s*\.\s*(?:save|insert|update|delete|persist|merge|upsert|select|find\w*)\s*\(/gi,
+    /\b\w{0,100}(?:mapper|repository|repo|dao)\w{0,100}\s*\.\s*(?:save|insert|update|delete|persist|merge|upsert|select|find\w*)\s*\(/gi,
   );
   const validationMarkers = countMatches(
     code,
@@ -152,7 +214,7 @@ export function analyzePracticeSource(
   );
   const mappingMarkers = countMatches(
     code,
-    /\b\w*(?:converter|assembler)\w*\s*\.\s*\w+\s*\(|\b(?:toResponse|buildResponse|fromEntity)\s*\(/gi,
+    /\b\w{0,100}(?:converter|assembler)\w{0,100}\s*\.\s*\w+\s*\(|\b(?:toResponse|buildResponse|fromEntity)\s*\(/gi,
   );
   const catchMarkers = countMatches(code, /\bcatch\s*\(/g);
   const receiverRecoveryCalls = countMatches(
@@ -172,7 +234,7 @@ export function analyzePracticeSource(
     /\b(?:legacy\w*|compat\w*|backward\w*|workaround\w*|migration\w*|oldVersion\w*)\b/gi,
   );
   const switchMarkers = countMatches(code, /\bswitch\s*\(/g);
-  const caseMarkers = countMatches(code, /\bcase\s+[^:]+:/g);
+  const caseMarkers = countMatches(code, /\bcase\s+[^:\n]{1,200}:/g);
   const typeDispatchMarkers = countMatches(code, /\binstanceof\s+[A-Za-z_$][\w$]*/g);
 
   const signals: PracticeSignal[] = [];
@@ -277,8 +339,8 @@ export function analyzePracticeTarget(
     return { ...base, signals: [], reason: "target-missing" };
   }
   const sourceKind = language === "java"
-    ? detectSourceKind(targetPath)
-    : detectTypeScriptSourceKind(targetPath);
+    ? detectSourceKind(targetPath, repositoryRoot)
+    : detectTypeScriptSourceKind(targetPath, repositoryRoot);
   if (sourceKind !== "production") {
     return { ...base, signals: [], reason: "non-production-target" };
   }

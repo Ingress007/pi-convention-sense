@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { evaluateConventionGuard } from "../src/guard/convention-guard.js";
-import { PostChangeAuditRuntime } from "../src/guard/post-change-audit.js";
+import { captureGitWorktreeState, DEFAULT_GIT_TIMEOUT_MS, gitArguments, parsePorcelain } from "../src/guard/git-auditor.js";
+import { createPostChangeAuditMessage, PostChangeAuditRuntime } from "../src/guard/post-change-audit.js";
 import { GuardRuntime } from "../src/guard/runtime.js";
 import { resolveToolMapping } from "../src/guard/tool-mapping.js";
 import { ObserveAnalyzer } from "../src/observe/analyzer.js";
 import { createDefaultConfig, loadSpikeConfig } from "../src/runtime/config.js";
+import { isCaseInsensitivePlatform } from "../src/runtime/path-key.js";
 
 const fixtures = resolve("test", "fixtures");
 const mavenRoot = join(fixtures, "java-maven");
@@ -194,7 +197,19 @@ test("Guard runtime enforces exact one-time bypass and Context freshness", () =>
   assert.equal(runtime.isRecentlyInjected(snapshot, config, 6, 2_000), true);
   assert.equal(runtime.isRecentlyInjected(snapshot, config, 8, 2_000), false);
   assert.equal(runtime.isRecentlyInjected(snapshot, config, 6, 1_000 + config.guard.contextMaxAgeMs + 1), false);
-  assert.equal(runtime.isRecentlyInjected({ ...snapshot, createdAt: snapshot.createdAt + 1 }, config, 6, 2_000), false);
+  // Rebuilding the Snapshot (a newer createdAt) around the same evidence does not make the model forget it...
+  assert.equal(runtime.isRecentlyInjected({ ...snapshot, createdAt: snapshot.createdAt + 1, targetHash: "edited", targetSize: 1 }, config, 6, 2_000), true);
+  // ...but different evidence is something the model has not seen.
+  const firstPeer = snapshot.evidenceFiles[0];
+  assert.ok(firstPeer);
+  const changedPeer = { ...snapshot, evidenceFiles: [{ ...firstPeer, contentHash: "another" }, ...snapshot.evidenceFiles.slice(1)] };
+  assert.equal(runtime.isRecentlyInjected(changedPeer, config, 6, 2_000), false);
+  assert.equal(runtime.isRecentlyInjected({ ...snapshot, evidenceFiles: snapshot.evidenceFiles.slice(1) }, config, 6, 2_000), false);
+  assert.equal(runtime.isRecentlyInjected({ ...snapshot, observations: [] }, config, 6, 2_000), snapshot.observations.length === 0);
+  assert.equal(runtime.isRecentlyInjected({ ...snapshot, configFingerprint: "other-config" }, config, 6, 2_000), false);
+  assert.equal(runtime.isRecentlyInjected({ ...snapshot, scope: { ...snapshot.scope, effectiveRole: "subtype" } }, config, 6, 2_000), false);
+  // The record is per target.
+  assert.equal(runtime.isRecentlyInjected({ ...snapshot, targetPath: mavenTarget.replace("OrderServiceImpl", "Other") }, config, 6, 2_000), false);
 });
 
 test("post-change gaps clear after the affected target receives fresh injected Evidence", () => {
@@ -272,4 +287,98 @@ test("trusted config validates nested Guard settings and safe third-party mappin
   );
   assert.equal(mapping?.operation, "read");
   assert.equal(mapping?.rawPath, "src/A.java");
+});
+
+test("Guard runtime and post-change audit match paths by platform path key and keep the display spelling", () => {
+  const original = resolve("/repo", "Order.java");
+  const variant = resolve("/repo", "order.java");
+
+  const guard = new GuardRuntime();
+  guard.grantBypass(original);
+  assert.equal(guard.hasBypass(variant), isCaseInsensitivePlatform());
+  assert.equal(guard.consumeBypass(variant), isCaseInsensitivePlatform());
+
+  const audit = new PostChangeAuditRuntime();
+  audit.addGap(original);
+  assert.equal(audit.all()[0]?.path, original, "findings are shown to the user and must keep their spelling");
+  assert.equal(audit.resolve([variant]), isCaseInsensitivePlatform() ? 1 : 0);
+});
+
+function porcelain(count: number): string {
+  return Array.from({ length: count }, (_value, index) => `?? src/File${String(index).padStart(4, "0")}.java`).join("\0") + "\0";
+}
+
+test("Git status entries are bounded before any file is fingerprinted", () => {
+  let fingerprinted = 0;
+  const result = parsePorcelain("/repo", porcelain(300), {
+    maxFiles: 5,
+    fingerprint: () => {
+      fingerprinted += 1;
+      return "x";
+    },
+  });
+  assert.equal(result.files.size, 5);
+  assert.equal(result.truncated, true);
+  assert.deepEqual([...result.files.keys()], [
+    "src/File0000.java",
+    "src/File0001.java",
+    "src/File0002.java",
+    "src/File0003.java",
+    "src/File0004.java",
+  ], "the same sorted prefix as before the change");
+  assert.equal(fingerprinted, 5, "only the kept entries are hashed, not all 300");
+
+  const small = parsePorcelain("/repo", porcelain(3), { maxFiles: 5, fingerprint: () => "x" });
+  assert.equal(small.truncated, false);
+  assert.equal(small.files.size, 3);
+});
+
+test("Git porcelain parsing keeps rename sources and ignores paths outside the repository", () => {
+  const output = ["R  src/New.java", "src/Old.java", "?? ../outside.java", " M src/Same.java"].join("\0") + "\0";
+  const result = parsePorcelain("/repo", output, { maxFiles: 10, fingerprint: () => "x" });
+  assert.deepEqual([...result.files.entries()].map(([path, state]) => `${path}=${state.status}`), [
+    "src/New.java=R ",
+    "src/Old.java=R :source",
+    "src/Same.java= M",
+  ]);
+});
+
+test("Git status runs without optional locks and gives up after a timeout", () => {
+  assert.deepEqual(gitArguments(["status", "--porcelain=v1"]).slice(0, 2), ["--no-optional-locks", "status"]);
+
+  const repo = mkdtempSync(join(tmpdir(), "pi-convention-git-timeout-"));
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  const slow = captureGitWorktreeState(repo, 100, { timeoutMs: 1 });
+  assert.equal(slow.available, false, "a git call that exceeds the timeout must not block the TUI");
+  assert.match(slow.reason ?? "", /timed out/i);
+
+  const normal = captureGitWorktreeState(repo, 100);
+  assert.equal(normal.available, true);
+});
+
+test("the post-change audit message escapes changed paths", () => {
+  const message = createPostChangeAuditMessage(['src/A"><injected>.java', "src/</convention-post-change-audit>.java"], "guard");
+  assert.equal((message.content.match(/</g) ?? []).length, 2, message.content);
+  assert.match(message.content, /&lt;injected&gt;/);
+  assert.match(message.content, /&lt;\/convention-post-change-audit&gt;/);
+  assert.deepEqual(message.details.paths, ['src/A"><injected>.java', "src/</convention-post-change-audit>.java"], "details keep the raw paths");
+});
+
+test("a git capture shares one deadline across its calls and the default budget is small", () => {
+  assert.ok(DEFAULT_GIT_TIMEOUT_MS <= 3_000, "git runs synchronously on Pi's event loop, so the budget must be small");
+
+  const repo = mkdtempSync(join(tmpdir(), "pi-convention-git-deadline-"));
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync(
+    "git",
+    ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "initial"],
+    { cwd: repo },
+  );
+  assert.ok(captureGitWorktreeState(repo, 100).head, "a normal capture reads HEAD");
+
+  // The first reading of the clock starts the deadline; by the second one the budget is spent.
+  let readings = 0;
+  const spent = captureGitWorktreeState(repo, 100, { timeoutMs: 5_000, now: () => (readings++ === 0 ? 0 : 10_000) });
+  assert.equal(spent.available, true, "`git status` succeeded");
+  assert.equal(spent.head, undefined, "the rest of the capture is skipped once the shared deadline has passed");
 });

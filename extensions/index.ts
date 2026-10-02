@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { CONFIG_DIR_NAME, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   evaluateConventionGuard,
@@ -14,25 +14,28 @@ import {
 import {
   createPostChangeAuditMessage,
   PostChangeAuditRuntime,
+  selectChangedSources,
+  selectEvidenceGaps,
 } from "../src/guard/post-change-audit.js";
 import { GuardRuntime } from "../src/guard/runtime.js";
 import { isShellTool, resolveToolMapping } from "../src/guard/tool-mapping.js";
+import { shellCommand, summarizeToolInput } from "../src/guard/tool-summary.js";
+import {
+  MAX_ACTIVE_SNAPSHOTS,
+  rememberRequestedTarget,
+  selectActiveTargetPaths,
+  selectCoveredTargets,
+  selectPracticeFallbackTargets,
+} from "../src/observe/active-targets.js";
 import { ObserveAnalyzer } from "../src/observe/analyzer.js";
 import { createConfigFingerprint } from "../src/observe/evidence-builder.js";
 import { matchesExcludedPath } from "../src/observe/repository-index.js";
 import { resolveAnalysisRepositoryRoot } from "../src/observe/repository-root.js";
 import { scopeKey } from "../src/observe/scope-detector.js";
 import { SnapshotCache } from "../src/observe/snapshot-cache.js";
-import type {
-  AnalyzeTargetResult,
-  ConventionSnapshot,
-  ObserveConfig,
-} from "../src/observe/types.js";
-import { detectSourceKind } from "../src/observe/java-analyzer.js";
-import {
-  detectTypeScriptLanguage,
-  detectTypeScriptSourceKind,
-} from "../src/observe/typescript-analyzer.js";
+import { snapshotCreatedPayload, snapshotSkippedPayload } from "../src/observe/snapshot-log.js";
+import { configuredSourceLanguage, isConfiguredProductionSource } from "../src/observe/source-selection.js";
+import type { AnalyzeTargetResult, ConventionSnapshot } from "../src/observe/types.js";
 import { BUILTIN_CONVENTION_PACKS } from "../src/profile/builtin-packs.js";
 import { loadProjectProfile } from "../src/profile/profile-loader.js";
 import { formatOneShotPracticeReview } from "../src/practice/capsule-formatter.js";
@@ -48,8 +51,10 @@ import {
 import type { PracticeAnalysisResult } from "../src/practice/types.js";
 import { applyStableGuidanceSection, createDynamicContextMessage } from "../src/runtime/context.js";
 import { loadSpikeConfig, resolveLogPath } from "../src/runtime/config.js";
+import { describeHandlerError, HandlerErrorLimiter } from "../src/runtime/handler-errors.js";
 import { NdjsonSpikeLogger, type LogMetadata } from "../src/runtime/logger.js";
 import { classifyShellMutationRisk, displayPath, normalizeToolPath } from "../src/runtime/paths.js";
+import { PathSet, pathKey } from "../src/runtime/path-key.js";
 import {
   checkpointState,
   createSpikeState,
@@ -58,7 +63,16 @@ import {
   recordToolResult,
   restoreStateFromBranch,
 } from "../src/runtime/state.js";
-import { buildStatus, formatStatus } from "../src/runtime/status.js";
+import { buildStatus, formatStatus, looksLikeWebProject } from "../src/runtime/status.js";
+import {
+  bypassCompletions,
+  buildProjectStatusLines,
+  formatLastGuardDecision,
+  formatSnapshotSummary,
+  rememberGuardDecision,
+  snapshotCommandTarget,
+  type GuardDecisionRecord,
+} from "../src/runtime/command-text.js";
 import {
   SPIKE_STATE_ENTRY_TYPE,
   type LoadedSpikeConfig,
@@ -69,59 +83,11 @@ import {
 
 const STATUS_KEY = "pi-convention-sense";
 const PRACTICE_REVIEW_MESSAGE_TYPE = "pi-convention-sense-practice-review";
-const MAX_ACTIVE_SNAPSHOTS = 4;
-const MAX_ACTIVE_PATHS = 20;
 
 interface ShellBaseline {
   git: GitWorktreeState;
-  coveredTargets: Set<string>;
+  coveredTargets: PathSet;
   riskTags: string[];
-}
-
-function shellCommand(input: unknown): string {
-  if (typeof input !== "object" || input === null) return "";
-  const command = (input as { command?: unknown }).command;
-  return typeof command === "string" ? command : "";
-}
-
-function configuredSourceLanguage(path: string, config: ObserveConfig): "java" | "typescript" | "vue" | undefined {
-  if (extname(path).toLowerCase() === ".java" && config.includeLanguages.includes("java")) return "java";
-  const language = detectTypeScriptLanguage(path);
-  return language && config.includeLanguages.includes(language) ? language : undefined;
-}
-
-function isConfiguredProductionSource(path: string, config: ObserveConfig): boolean {
-  const language = configuredSourceLanguage(path, config);
-  if (!language) return false;
-  return language === "java"
-    ? detectSourceKind(path) === "production"
-    : detectTypeScriptSourceKind(path) === "production";
-}
-
-function summarizeToolInput(
-  toolName: string,
-  input: unknown,
-  cwd: string,
-  config: SpikeConfig,
-): Record<string, unknown> {
-  const mapping = resolveToolMapping(toolName, input, config.toolMappings);
-  if (mapping) {
-    const absolutePath = normalizeToolPath(cwd, mapping.rawPath);
-    return {
-      path: displayPath(cwd, absolutePath),
-      operation: mapping.operation,
-      builtinMapping: mapping.builtin,
-    };
-  }
-
-  if (isShellTool(toolName)) {
-    const command = shellCommand(input);
-    return {
-      commandLength: command.length,
-      mutationRiskTags: classifyShellMutationRisk(command),
-    };
-  }
-  return {};
 }
 
 export interface SpikeExtensionRuntime {
@@ -148,6 +114,9 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   const shellBaselines = new Map<string, ShellBaseline>();
   const analysisReasons = new Map<string, AnalyzeTargetResult["reason"]>();
   let guardRequestedTargets: string[] = [];
+  let guardDecisions: GuardDecisionRecord[] = [];
+  // `getArgumentCompletions` runs outside any event, so it needs the working directory of the last session start.
+  let commandCwd = process.cwd();
   let checkpointDirty = false;
 
   const metadata = (ctx: ExtensionContext): LogMetadata => {
@@ -162,6 +131,36 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   const log = (ctx: ExtensionContext, event: string, payload: Record<string, unknown> = {}): void => {
     logger.write(event, payload, metadata(ctx));
   };
+
+  const handlerErrors = new HandlerErrorLimiter();
+  const reportHandlerError = (event: string, ctx: unknown, error: unknown): void => {
+    try {
+      const description = describeHandlerError(error);
+      const { log: shouldLog, occurrences } = handlerErrors.record(
+        [event, description.errorName, description.errorCode ?? "", description.errorLocation ?? ""].join("|"),
+      );
+      if (!shouldLog) return;
+      logger.write("handler_error", { handlerEvent: event, ...description, occurrences }, ctx ? metadata(ctx as ExtensionContext) : {});
+    } catch {
+      // Reporting must never turn a recoverable failure into another one.
+    }
+  };
+
+  // Pi's runner catches handler errors for every event except `tool_call`, where a throw blocks the
+  // tool as a fail-safe. Observe and Guard must fail open, so every handler swallows its own errors.
+  const rawOn = pi.on.bind(pi) as unknown as (
+    event: string,
+    handler: (...args: unknown[]) => unknown,
+  ) => unknown;
+  const on = ((event: string, handler: (...args: unknown[]) => unknown) =>
+    rawOn(event, async (...args: unknown[]) => {
+      try {
+        return await handler(...args);
+      } catch (error) {
+        reportHandlerError(event, args[1], error);
+        return undefined;
+      }
+    })) as unknown as ExtensionAPI["on"];
 
   const profileForRepository = (ctx: ExtensionContext, repositoryRoot: string) =>
     loadProjectProfile(
@@ -204,11 +203,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   };
 
   const rememberGuardTarget = (targetPath: string): void => {
-    guardRequestedTargets = guardRequestedTargets.filter((path) => path !== targetPath);
-    guardRequestedTargets.push(targetPath);
-    if (guardRequestedTargets.length > MAX_ACTIVE_SNAPSHOTS) {
-      guardRequestedTargets.splice(0, guardRequestedTargets.length - MAX_ACTIVE_SNAPSHOTS);
-    }
+    guardRequestedTargets = rememberRequestedTarget(guardRequestedTargets, targetPath);
   };
 
   const analyzePath = (
@@ -227,79 +222,28 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       : analyzer.analyzeTarget(targetPath, repositoryRoot, config, profileOptions);
     if (result.snapshot) {
       snapshotCache.set(result.snapshot);
-      analysisReasons.delete(result.snapshot.targetPath);
-      log(ctx, "snapshot_created", {
+      analysisReasons.delete(pathKey(result.snapshot.targetPath));
+      log(ctx, "snapshot_created", snapshotCreatedPayload({
         trigger,
-        targetPath: displayPath(ctx.cwd, result.snapshot.targetPath),
-        targetKind: result.snapshot.targetKind,
-        repositoryRoot: displayPath(ctx.cwd, result.snapshot.repositoryRoot),
-        scope: scopeKey(result.snapshot.scope),
-        baseRole: result.snapshot.scope.role,
-        effectiveRole: result.snapshot.scope.effectiveRole,
-        profileStatus: loadedProfile.status,
-        profileFingerprint: loadedProfile.fingerprint,
-        profileDiagnostics: loadedProfile.diagnostics,
-        scopeConfidence: result.snapshot.scope.confidence,
-        status: result.snapshot.status,
-        indexedFileCount: result.indexedFileCount,
-        consideredCandidateCount: result.consideredCandidateCount,
-        durationMs: result.durationMs,
-        tokenEstimate: result.snapshot.tokenEstimate,
-        candidateCount: result.snapshot.candidates.length,
-        candidates: config.logging.explainRanking
-          ? result.snapshot.candidates.map((candidate) => ({
-              path: displayPath(ctx.cwd, candidate.path),
-              score: candidate.score,
-              level: candidate.level,
-              breakdown: candidate.breakdown,
-            }))
-          : result.snapshot.candidates.map((candidate) => displayPath(ctx.cwd, candidate.path)),
-        observations: result.snapshot.observations.map((observation) => ({
-          category: observation.category,
-          pattern: observation.pattern,
-          support: observation.support,
-          samples: observation.samples,
-          confidence: observation.confidence,
-          status: observation.status,
-        })),
-      });
+        snapshot: result.snapshot,
+        result,
+        loadedProfile,
+        explainRanking: config.logging.explainRanking,
+        cwd: ctx.cwd,
+      }));
     } else {
-      analysisReasons.set(normalizeToolPath(ctx.cwd, targetPath), result.reason);
-      log(ctx, "snapshot_skipped", {
-        trigger,
-        targetPath: displayPath(ctx.cwd, targetPath),
-        reason: result.reason,
-        error: result.error,
-        durationMs: result.durationMs,
-        indexedFileCount: result.indexedFileCount,
-        consideredCandidateCount: result.consideredCandidateCount,
-      });
+      analysisReasons.set(pathKey(normalizeToolPath(ctx.cwd, targetPath)), result.reason);
+      log(ctx, "snapshot_skipped", snapshotSkippedPayload({ trigger, targetPath, result, cwd: ctx.cwd }));
     }
     return result;
   };
 
-  const activeTargetPaths = (): string[] => {
-    const paths: string[] = [];
-    const addPath = (path: string) => {
-      if (
-        paths.length >= MAX_ACTIVE_PATHS ||
-        !configuredSourceLanguage(path, config) ||
-        paths.includes(path)
-      ) return;
-      paths.push(path);
-    };
-
-    for (let index = guardRequestedTargets.length - 1; index >= 0; index -= 1) {
-      const path = guardRequestedTargets[index];
-      if (path) addPath(path);
-    }
-    for (let index = state.recentReads.length - 1; index >= 0; index -= 1) {
-      const record = state.recentReads[index];
-      if (record) addPath(record.path);
-      if (paths.length >= MAX_ACTIVE_PATHS) break;
-    }
-    return paths;
-  };
+  const activeTargetPaths = (): string[] =>
+    selectActiveTargetPaths({
+      requested: guardRequestedTargets,
+      recentReads: state.recentReads,
+      isSupported: (path) => configuredSourceLanguage(path, config) !== undefined,
+    });
 
   const ensureActiveSnapshots = (
     ctx: ExtensionContext,
@@ -334,29 +278,23 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     shellBaselines.clear();
     analysisReasons.clear();
     guardRequestedTargets = [];
+    guardDecisions = [];
   };
 
   const isPathException = (cwd: string, path: string): boolean =>
     config.guard.pathExceptions.length > 0 && matchesExcludedPath(cwd, path, config.guard.pathExceptions);
 
-  const captureCoveredTargets = (ctx: ExtensionContext): Set<string> => {
-    const covered = new Set<string>();
+  const captureCoveredTargets = (ctx: ExtensionContext): PathSet => {
+    const fresh: ConventionSnapshot[] = [];
     for (const cached of snapshotCache.list()) {
       const repositoryRoot = resolveAnalysisRepositoryRoot(cached.targetPath, ctx.cwd);
-      const fingerprint = fingerprintForRepository(ctx, repositoryRoot);
-      const snapshot = snapshotCache.getFresh(cached.targetPath, fingerprint);
-      if (!snapshot) continue;
-      const targetReady = snapshot.targetKind === "prospective" || state.successfulReads.has(snapshot.targetPath);
-      if (!targetReady) continue;
-      if (snapshot.status === "weak") {
-        covered.add(snapshot.targetPath);
-        continue;
-      }
-      if (guardRuntime.isRecentlyInjected(snapshot, config, state.turnIndex)) {
-        covered.add(snapshot.targetPath);
-      }
+      const snapshot = snapshotCache.getFresh(cached.targetPath, fingerprintForRepository(ctx, repositoryRoot));
+      if (snapshot) fresh.push(snapshot);
     }
-    return covered;
+    return selectCoveredTargets(fresh, {
+      isRead: (path) => state.successfulReads.has(path),
+      isInjected: (snapshot) => guardRuntime.isRecentlyInjected(snapshot, config, state.turnIndex),
+    });
   };
 
   const auditShellResult = (
@@ -387,18 +325,20 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       return;
     }
 
-    const changedSources = diff.changedPaths
-      .map((path) => normalizeToolPath(ctx.cwd, path))
-      .filter((path) => isConfiguredProductionSource(path, config))
-      .filter((path) => !matchesExcludedPath(ctx.cwd, path, config.exclude))
-      .filter((path) => !isPathException(ctx.cwd, path));
-    const gaps = changedSources.filter((path) => !baseline.coveredTargets.has(path));
+    const changedSources = selectChangedSources({
+      cwd: ctx.cwd,
+      changedPaths: diff.changedPaths,
+      isProductionSource: (path) => isConfiguredProductionSource(path, config, resolveAnalysisRepositoryRoot(path, ctx.cwd)),
+      isExcluded: (path) => matchesExcludedPath(ctx.cwd, path, config.exclude),
+      isException: (path) => isPathException(ctx.cwd, path),
+    });
+    const gaps = selectEvidenceGaps(changedSources, baseline.coveredTargets);
 
     for (const path of changedSources) {
       snapshotCache.invalidatePath(path, "shell-post-change");
       if (config.practiceReview.mode === "auto-once") practiceReviewRuntime.recordMutation(path);
     }
-    if (changedSources.length > 0) analyzer.invalidateIndex();
+    for (const path of diff.changedPaths) analyzer.noteFileChanged(normalizeToolPath(ctx.cwd, path));
     for (const path of gaps) postChangeAudit.addGap(path);
     state.postChangeGapCount += gaps.length;
 
@@ -414,7 +354,8 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     });
   };
 
-  pi.on("session_start", async (event, ctx) => {
+  on("session_start", async (event, ctx) => {
+    commandCwd = ctx.cwd;
     loadedConfig = loadSpikeConfig(ctx.cwd, ctx.isProjectTrusted(), CONFIG_DIR_NAME);
     config = loadedConfig.config;
     logger = new NdjsonSpikeLogger(resolveLogPath(ctx.cwd, config.logPath), config.logging.level);
@@ -449,15 +390,15 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     }
   });
 
-  pi.on("session_before_switch", async (event, ctx) => {
+  on("session_before_switch", async (event, ctx) => {
     log(ctx, "session_before_switch", { reason: event.reason, targetSessionFile: event.targetSessionFile });
   });
 
-  pi.on("session_before_fork", async (event, ctx) => {
+  on("session_before_fork", async (event, ctx) => {
     log(ctx, "session_before_fork", { entryId: event.entryId, position: event.position });
   });
 
-  pi.on("session_tree", async (event, ctx) => {
+  on("session_tree", async (event, ctx) => {
     state = restoreStateFromBranch(ctx.sessionManager.getBranch() as readonly SessionEntryLike[]);
     clearBranchRuntime();
     checkpointDirty = false;
@@ -473,7 +414,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     refreshStatus(ctx);
   });
 
-  pi.on("session_shutdown", async (event, ctx) => {
+  on("session_shutdown", async (event, ctx) => {
     persistCheckpoint();
     log(ctx, "session_shutdown", {
       reason: event.reason,
@@ -483,7 +424,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 
-  pi.on("before_agent_start", async (event, ctx) => {
+  on("before_agent_start", async (event, ctx) => {
     log(ctx, "before_agent_start", {
       promptLength: event.prompt.length,
       imageCount: event.images?.length ?? 0,
@@ -502,14 +443,14 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     applyStableGuidanceSection(event.systemPromptOptions.sections);
   });
 
-  pi.on("agent_start", async (_event, ctx) => log(ctx, "agent_start"));
+  on("agent_start", async (_event, ctx) => log(ctx, "agent_start"));
 
-  pi.on("turn_start", async (event, ctx) => {
+  on("turn_start", async (event, ctx) => {
     state.turnIndex = event.turnIndex;
     log(ctx, "turn_start", { turnIndex: event.turnIndex, timestamp: event.timestamp });
   });
 
-  pi.on("context", async (event, ctx) => {
+  on("context", async (event, ctx) => {
     const activePaths = config.enabled ? activeTargetPaths() : [];
     const snapshots = config.enabled ? ensureActiveSnapshots(ctx, activePaths) : [];
     const appendedMessages: typeof event.messages = [];
@@ -519,20 +460,23 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     if (config.enabled && config.injectContext) {
       if (config.practiceReview.mode === "suggest") {
         practiceAnalyses = snapshots.map((snapshot) => analyzePracticeSnapshot(snapshot));
-        const snapshotTargets = new Set(snapshots.map((snapshot) => snapshot.targetPath));
-        for (const path of activePaths) {
-          if (practiceAnalyses.length >= MAX_ACTIVE_SNAPSHOTS) break;
-          if (
-            snapshotTargets.has(path) ||
-            analysisReasons.get(path) !== "scope-unknown" ||
-            !state.successfulReads.has(path) ||
-            !existsSync(path)
-          ) continue;
-          const language = configuredSourceLanguage(path, config);
-          if (!language || !isConfiguredProductionSource(path, config)) continue;
-          const repositoryRoot = resolveAnalysisRepositoryRoot(path, ctx.cwd);
-          if (matchesExcludedPath(repositoryRoot, path, config.exclude)) continue;
-          practiceAnalyses.push(analyzePracticeTarget(path, repositoryRoot, language));
+        const fallbackTargets = selectPracticeFallbackTargets({
+          activePaths,
+          snapshotTargets: new PathSet(snapshots.map((snapshot) => snapshot.targetPath)),
+          analysisReasons,
+          isRead: (path) => state.successfulReads.has(path),
+          exists: existsSync,
+          eligibility: (path) => {
+            const language = configuredSourceLanguage(path, config);
+            const repositoryRoot = resolveAnalysisRepositoryRoot(path, ctx.cwd);
+            if (!language || !isConfiguredProductionSource(path, config, repositoryRoot)) return undefined;
+            if (matchesExcludedPath(repositoryRoot, path, config.exclude)) return undefined;
+            return { repositoryRoot, language };
+          },
+          slots: MAX_ACTIVE_SNAPSHOTS - practiceAnalyses.length,
+        });
+        for (const target of fallbackTargets) {
+          practiceAnalyses.push(analyzePracticeTarget(target.path, target.repositoryRoot, target.language));
         }
       }
       state.contextInjectionCount += 1;
@@ -544,10 +488,10 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
         practiceAnalyses,
       );
       const included = new Map(
-        message.details.includedSnapshots.map((item) => [item.targetPath, item.createdAt] as const),
+        message.details.includedSnapshots.map((item) => [pathKey(item.targetPath), item.createdAt] as const),
       );
       includedSnapshots = snapshots.filter(
-        (snapshot) => included.get(snapshot.targetPath) === snapshot.createdAt,
+        (snapshot) => included.get(pathKey(snapshot.targetPath)) === snapshot.createdAt,
       );
       guardRuntime.markInjected(includedSnapshots, state.turnIndex);
       const resolvedGapCount = postChangeAudit.resolve(
@@ -603,7 +547,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     return { messages: [...event.messages, ...appendedMessages] };
   });
 
-  pi.on("tool_execution_start", async (event, ctx) => {
+  on("tool_execution_start", async (event, ctx) => {
     recordToolExecutionStart(state, event, ctx.cwd, Date.now(), config.toolMappings);
     const command = isShellTool(event.toolName) ? shellCommand(event.args) : "";
     const riskTags = command ? classifyShellMutationRisk(command) : [];
@@ -624,7 +568,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     refreshStatus(ctx);
   });
 
-  pi.on("tool_call", async (event, ctx) => {
+  on("tool_call", async (event, ctx) => {
     log(ctx, "tool_call", {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
@@ -671,12 +615,18 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       unsupportedLanguage,
       targetExcluded,
       pathException: isPathException(repositoryRoot, targetPath),
-      ...(analysisReasons.get(targetPath)
-        ? { analysisReason: analysisReasons.get(targetPath) }
+      ...(analysisReasons.get(pathKey(targetPath))
+        ? { analysisReason: analysisReasons.get(pathKey(targetPath)) }
         : {}),
     });
 
     state.guardCounters[decision.action] += 1;
+    guardDecisions = rememberGuardDecision(guardDecisions, {
+      toolName: event.toolName,
+      targetPath,
+      action: decision.action,
+      reasonCode: decision.reasonCode,
+    });
     if (decision.reasonCode === "BYPASS_GRANTED" && guardRuntime.consumeBypass(targetPath)) {
       state.bypassCount += 1;
       log(ctx, "guard_bypass_consumed", {
@@ -717,7 +667,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     }
   });
 
-  pi.on("tool_result", async (event, ctx) => {
+  on("tool_result", async (event, ctx) => {
     const change = recordToolResult(state, event, ctx.cwd, Date.now(), config.toolMappings);
     if (change.checkpointChanged) checkpointDirty = true;
 
@@ -728,7 +678,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     let invalidatedSnapshots = 0;
     if (config.enabled && change.mutation) {
       invalidatedSnapshots = snapshotCache.invalidatePath(change.mutation.path);
-      analyzer.invalidateIndex();
+      analyzer.noteFileChanged(change.mutation.path);
       if (config.practiceReview.mode === "auto-once") {
         practiceReviewRuntime.recordMutation(
           change.mutation.path,
@@ -762,11 +712,12 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       invalidatedSnapshots,
     });
 
-    persistCheckpoint();
+    // The checkpoint is a full ledger snapshot: it is flushed at agent_settled and session_shutdown,
+    // never once per tool result.
     refreshStatus(ctx);
   });
 
-  pi.on("tool_execution_end", async (event, ctx) => {
+  on("tool_execution_end", async (event, ctx) => {
     recordToolExecutionEnd(state, event.toolCallId);
     log(ctx, "tool_execution_end", {
       toolCallId: event.toolCallId,
@@ -777,7 +728,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     refreshStatus(ctx);
   });
 
-  pi.on("turn_end", async (event, ctx) => {
+  on("turn_end", async (event, ctx) => {
     log(ctx, "turn_end", {
       turnIndex: event.turnIndex,
       messageRole: event.message.role,
@@ -785,9 +736,9 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     });
   });
 
-  pi.on("agent_end", async (event, ctx) => log(ctx, "agent_end", { messageCount: event.messages.length }));
+  on("agent_end", async (event, ctx) => log(ctx, "agent_end", { messageCount: event.messages.length }));
 
-  pi.on("agent_before_settle", async (event, ctx) => {
+  on("agent_before_settle", async (event, ctx) => {
     if (!config.enabled || config.practiceReview.mode !== "auto-once") return;
 
     const startedAt = Date.now();
@@ -813,7 +764,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
       isEligible: (path) => {
         const repositoryRoot = resolveAnalysisRepositoryRoot(path, ctx.cwd);
         return existsSync(path) &&
-          isConfiguredProductionSource(path, config) &&
+          isConfiguredProductionSource(path, config, repositoryRoot) &&
           !matchesExcludedPath(repositoryRoot, path, config.exclude);
       },
     });
@@ -888,7 +839,7 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
     };
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
+  on("agent_settled", async (_event, ctx) => {
     persistCheckpoint();
     const findings = postChangeAudit.all();
     log(ctx, "agent_settled", {
@@ -934,27 +885,18 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
         ...(logger.lastError === undefined ? {} : { loggerError: logger.lastError }),
       });
       const projectProfile = profileForRepository(ctx, ctx.cwd);
-      const profileParts = [`profile=${projectProfile.status}`];
-      if (projectProfile.profile !== undefined) {
-        profileParts.push(`review=${projectProfile.profile.review.status}`);
-      }
-      if (projectProfile.fingerprint !== undefined) {
-        profileParts.push(`fingerprint=${projectProfile.fingerprint}`);
-      }
-      const activePacks = projectProfile.profile?.packs.flatMap((pack) => {
-        if (!pack.enabled) return [];
-        const versionSuffix = pack.version ? `@${pack.version}` : "";
-        return [`${pack.id}${versionSuffix}`];
-      }) ?? [];
-      const projectLines = [
-        `config-source=${loadedConfig.usedProjectConfig ? "project" : "defaults"}`,
-        `practice=${config.practiceReview.mode}, practice-tokens=${config.practiceReview.maxContextTokens}`,
-        profileParts.join(", "),
-        `packs=${activePacks.join(", ") || "none"}`,
-        ...(projectProfile.diagnostics.length > 0
-          ? [`profile-diagnostics=${projectProfile.diagnostics.join("; ")}`]
-          : []),
-      ];
+      // TypeScript/Vue are opt-in. A web project with the default config is otherwise silently ignored.
+      const webProjectNotAnalyzed = looksLikeWebProject(ctx.cwd) &&
+        !config.includeLanguages.some((language) => language === "typescript" || language === "vue");
+      const projectLines = buildProjectStatusLines({
+        config,
+        usedProjectConfig: loadedConfig.usedProjectConfig,
+        projectTrusted: ctx.isProjectTrusted(),
+        profile: projectProfile,
+        webProjectNotAnalyzed,
+        configDirName: CONFIG_DIR_NAME,
+        lastGuard: formatLastGuardDecision(guardDecisions, ctx.cwd),
+      });
       const level = logger.lastError || projectProfile.status === "invalid" ? "warning" : "info";
       ctx.ui.notify([formatStatus(status), ...projectLines].join("\n"), level);
     },
@@ -993,27 +935,46 @@ export function registerConventionSenseSpike(pi: ExtensionAPI): SpikeExtensionRu
   });
 
   pi.registerCommand("convention-snapshot", {
-    description: "Show the newest convention Snapshot summary",
-    handler: async (_args, ctx) => {
-      const snapshot = ensureActiveSnapshots(ctx)[0];
-      if (!snapshot) {
-        ctx.ui.notify("No convention Snapshot is available on the active branch.", "warning");
+    description: "Show the newest convention Snapshot summary, or the one for a given path",
+    handler: async (args, ctx) => {
+      const requested = snapshotCommandTarget(args);
+      if (!requested) {
+        const snapshot = ensureActiveSnapshots(ctx)[0];
+        if (!snapshot) {
+          ctx.ui.notify("No convention Snapshot is available on the active branch.", "warning");
+          return;
+        }
+        ctx.ui.notify(formatSnapshotSummary(snapshot, ctx.cwd), snapshot.status === "valid" ? "info" : "warning");
         return;
       }
-      const lines = [
-        `scope=${scopeKey(snapshot.scope)}`,
-        `status=${snapshot.status}, confidence=${snapshot.scope.confidence}, targetKind=${snapshot.targetKind}`,
-        `repository=${displayPath(ctx.cwd, snapshot.repositoryRoot)}`,
-        `target=${displayPath(snapshot.repositoryRoot, snapshot.targetPath)}`,
-        `peers=${snapshot.evidenceFiles.map((item) => displayPath(snapshot.repositoryRoot, item.path)).join(", ") || "none"}`,
-        `observations=${snapshot.observations.length}, tokens≈${snapshot.tokenEstimate}`,
-      ];
-      ctx.ui.notify(lines.join("\n"), snapshot.status === "valid" ? "info" : "warning");
+
+      const targetPath = normalizeToolPath(ctx.cwd, requested);
+      const shown = displayPath(ctx.cwd, targetPath);
+      if (!configuredSourceLanguage(targetPath, config)) {
+        ctx.ui.notify(`${shown} is not a configured source file (languages=${config.includeLanguages.join(",") || "none"}).`, "warning");
+        return;
+      }
+      const repositoryRoot = resolveAnalysisRepositoryRoot(targetPath, ctx.cwd);
+      const targetExists = existsSync(targetPath);
+      let snapshot = snapshotCache.getFresh(targetPath, fingerprintForRepository(ctx, repositoryRoot));
+      // Only a target that was read (or does not exist yet) may be analyzed, exactly as for the model's own requests.
+      if (!snapshot && config.enabled && (!targetExists || state.successfulReads.has(targetPath))) {
+        snapshot = analyzePath(ctx, targetPath, "freshness", !targetExists).snapshot;
+      }
+      if (!snapshot) {
+        ctx.ui.notify(`No convention Snapshot for ${shown}: read it first (or the analysis found nothing comparable).`, "warning");
+        return;
+      }
+      ctx.ui.notify(formatSnapshotSummary(snapshot, ctx.cwd), snapshot.status === "valid" ? "info" : "warning");
     },
   });
 
   pi.registerCommand("convention-bypass", {
     description: "Grant one exact-path Convention Guard bypass",
+    getArgumentCompletions: (prefix) =>
+      config.enabled && config.mode === "guard" && config.guard.allowBypass
+        ? bypassCompletions({ decisions: guardDecisions, cwd: commandCwd, prefix })
+        : null,
     handler: async (args, ctx) => {
       const rawPath = args.trim();
       if (!rawPath) {
